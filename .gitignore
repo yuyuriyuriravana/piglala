@@ -1,0 +1,43 @@
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+
+# Runtime state
+store.json
+store.sqlite3
+store.sqlite3-*
+conversations.sqlite3
+conversations.sqlite3-*
+*.log
+*.pid
+
+# Build outputs
+piglala
+bot
+bin/
+*.exe
+*.out
+*.test
+coverage.out
+*.prof
+dist/
+build/
+tmp/
+temp/
+
+# Dependency/tool archives
+*.tar.gz
+
+# Editor and local tool state
+.claude/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+.codex
