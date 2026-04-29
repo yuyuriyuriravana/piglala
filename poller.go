@@ -50,7 +50,11 @@ func (p *Poller) refreshZones() {
 	}
 	p.relevantZones = zones
 	p.zonesUpdatedAt = time.Now()
-	log.Printf("fflogs: tracking %d zone/difficulty pairs (savage, extreme, ultimate)", len(zones))
+	counts := map[string]int{}
+	for _, zone := range zones {
+		counts[zone.ContentType]++
+	}
+	log.Printf("fflogs: tracking %d zone/difficulty pairs savage=%d extreme=%d ultimate=%d", len(zones), counts["Savage"], counts["Extreme"], counts["Ultimate"])
 }
 
 func (p *Poller) checkAll(announce bool) {
@@ -79,7 +83,7 @@ func (p *Poller) checkAll(announce bool) {
 		playerUpdates := 0
 		playerFailures := 0
 		for _, zone := range p.relevantZones {
-			log.Printf("fflogs: fetching rankings player=%s zone=%q difficulty=%q", key, zone.ZoneName, zone.DifficultyName)
+			log.Printf("fflogs: fetching rankings player=%s zone=%q difficulty=%q content_type=%q", key, zone.ZoneName, zone.DifficultyName, zone.ContentType)
 			rankings, err := p.fflogs.GetZoneRankings(player.Name, player.Server, player.Region, zone)
 			if err != nil {
 				log.Printf("fflogs: %s %s: %v", key, zone.ZoneName, err)
@@ -87,7 +91,7 @@ func (p *Poller) checkAll(announce bool) {
 				playerFailures++
 				continue
 			}
-			log.Printf("fflogs: fetched %d ranking(s) player=%s zone=%q difficulty=%q", len(rankings), key, zone.ZoneName, zone.DifficultyName)
+			log.Printf("fflogs: fetched %d ranking(s) player=%s zone=%q difficulty=%q content_type=%q", len(rankings), key, zone.ZoneName, zone.DifficultyName, zone.ContentType)
 			totalRankings += len(rankings)
 			playerRankings += len(rankings)
 			for _, r := range rankings {

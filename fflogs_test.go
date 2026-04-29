@@ -24,3 +24,27 @@ func TestIsRelevantDifficultyTracksHighEndFights(t *testing.T) {
 		})
 	}
 }
+
+func TestRelevantContentTypeTracksHighEndZones(t *testing.T) {
+	tests := []struct {
+		name       string
+		zone       string
+		difficulty string
+		want       string
+	}{
+		{name: "savage difficulty", zone: "AAC Heavyweight", difficulty: "Savage", want: "Savage"},
+		{name: "extreme difficulty", zone: "Some Zone", difficulty: "Extreme", want: "Extreme"},
+		{name: "ultimate difficulty", zone: "Some Zone", difficulty: "Ultimate", want: "Ultimate"},
+		{name: "extreme trial zone", zone: "Dawntrail Trials", difficulty: "Normal", want: "Extreme"},
+		{name: "ultimate zone", zone: "The Weapon's Refrain", difficulty: "Normal", want: "Ultimate"},
+		{name: "untracked normal", zone: "Dungeons", difficulty: "Normal", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := relevantContentType(tt.zone, tt.difficulty); got != tt.want {
+				t.Fatalf("relevantContentType(%q, %q) = %q, want %q", tt.zone, tt.difficulty, got, tt.want)
+			}
+		})
+	}
+}

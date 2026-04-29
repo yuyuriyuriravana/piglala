@@ -8,7 +8,7 @@ The bot stores its local watch list, notification subscribers, recorded best par
 
 Commands are accepted from any DM or server channel the bot can access.
 
-- `!status` lists watched players and their recorded best parses for tracked Savage, Extreme, and Ultimate fights.
+- `!status` lists watched players and their recorded best parses for the latest Savage tier plus any Ultimates they have done.
 - `!help` shows all supported commands.
 - `!subscribe` subscribes the DM user, or the server channel where it is typed, to parse improvement notifications.
 - `!unsubscribe` removes the DM user, or the server channel where it is typed, from parse improvement notifications.

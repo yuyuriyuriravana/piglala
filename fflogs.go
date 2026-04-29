@@ -119,6 +119,7 @@ type RelevantZone struct {
 	ZoneName       string
 	DifficultyID   int
 	DifficultyName string
+	ContentType    string
 }
 
 type CharacterRanking struct {
@@ -147,8 +148,60 @@ var relevantDifficultyNames = map[string]bool{
 	"ultimate": true,
 }
 
+var extremeZoneNames = map[string]bool{
+	"dawntrail trials":      true,
+	"endwalker trials":      true,
+	"shadowbringers trials": true,
+	"stormblood trials":     true,
+	"heavensward trials":    true,
+	"a realm reborn trials": true,
+}
+
+var ultimateZoneNames = map[string]bool{
+	"futures rewritten":              true,
+	"the omega protocol":             true,
+	"dragonsong's reprise":           true,
+	"the epic of alexander":          true,
+	"the weapon's refrain":           true,
+	"the unending coil of bahamut":   true,
+	"the unending coil of bahamut 2": true,
+	"ultimates (legacy)":             true,
+	"ultimates (stormblood)":         true,
+	"ultimates (shadowbringers)":     true,
+	"ultimates (endwalker)":          true,
+	"ultimates (dawntrail)":          true,
+}
+
 func isRelevantDifficulty(name string) bool {
 	return relevantDifficultyNames[strings.ToLower(strings.TrimSpace(name))]
+}
+
+func relevantContentType(zoneName, difficultyName string) string {
+	normalizedDifficulty := strings.ToLower(strings.TrimSpace(difficultyName))
+	if relevantDifficultyNames[normalizedDifficulty] {
+		switch normalizedDifficulty {
+		case "savage":
+			return "Savage"
+		case "extreme":
+			return "Extreme"
+		case "ultimate":
+			return "Ultimate"
+		}
+	}
+
+	normalizedZone := normalizeZoneName(zoneName)
+	switch {
+	case ultimateZoneNames[normalizedZone] || strings.Contains(normalizedZone, "ultimate"):
+		return "Ultimate"
+	case extremeZoneNames[normalizedZone] || strings.Contains(normalizedZone, "trials"):
+		return "Extreme"
+	default:
+		return ""
+	}
+}
+
+func normalizeZoneName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
 }
 
 func (c *fflogsClient) GetRelevantZones() ([]RelevantZone, error) {
@@ -184,12 +237,14 @@ func (c *fflogsClient) GetRelevantZones() ([]RelevantZone, error) {
 	var result []RelevantZone
 	for _, zone := range resp.Data.WorldData.Zones {
 		for _, diff := range zone.Difficulties {
-			if isRelevantDifficulty(diff.Name) {
+			contentType := relevantContentType(zone.Name, diff.Name)
+			if contentType != "" {
 				result = append(result, RelevantZone{
 					ZoneID:         zone.ID,
 					ZoneName:       zone.Name,
 					DifficultyID:   diff.ID,
 					DifficultyName: diff.Name,
+					ContentType:    contentType,
 				})
 			}
 		}

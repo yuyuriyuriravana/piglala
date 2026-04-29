@@ -16,16 +16,28 @@ type encounterOrder struct {
 const ultimatesTierName = "Ultimates"
 
 var ultimateEncounterNames = map[string]bool{
-	"the unending coil of bahamut": true,
-	"the weapon's refrain":         true,
-	"the epic of alexander":        true,
-	"dragonsong's reprise":         true,
-	"the omega protocol":           true,
-	"futures rewritten":            true,
+	"the unending coil of bahamut":           true,
+	"the unending coil of bahamut (ultimate)": true,
+	"the weapon's refrain":                   true,
+	"the weapon's refrain (ultimate)":         true,
+	"the epic of alexander":                  true,
+	"the epic of alexander (ultimate)":        true,
+	"dragonsong's reprise":                   true,
+	"dragonsong's reprise (ultimate)":         true,
+	"the omega protocol":                     true,
+	"the omega protocol (ultimate)":           true,
+	"futures rewritten":                      true,
+	"futures rewritten (ultimate)":            true,
 }
 
 var encounterOrders = map[int]encounterOrder{
-	78:  {tierName: "Asphodelos (P1S-P4S)", tierOrder: 10, floorOrder: 1},
+	1060: {tierName: ultimatesTierName, tierOrder: 900, floorOrder: 1, showInStatus: true}, // UCoB
+	1061: {tierName: ultimatesTierName, tierOrder: 900, floorOrder: 2, showInStatus: true}, // UWU
+	1062: {tierName: ultimatesTierName, tierOrder: 900, floorOrder: 3, showInStatus: true}, // TEA
+	1065: {tierName: ultimatesTierName, tierOrder: 900, floorOrder: 4, showInStatus: true}, // DSR
+	1068: {tierName: ultimatesTierName, tierOrder: 900, floorOrder: 5, showInStatus: true}, // TOP
+	1072: {tierName: ultimatesTierName, tierOrder: 900, floorOrder: 6, showInStatus: true}, // FRU
+	78:   {tierName: "Asphodelos (P1S-P4S)", tierOrder: 10, floorOrder: 1},
 	79:  {tierName: "Asphodelos (P1S-P4S)", tierOrder: 10, floorOrder: 2},
 	80:  {tierName: "Asphodelos (P1S-P4S)", tierOrder: 10, floorOrder: 3},
 	81:  {tierName: "Asphodelos (P1S-P4S)", tierOrder: 10, floorOrder: 4},
@@ -126,11 +138,15 @@ func orderedBestParses(bests map[int]BestParse) []orderedBestParse {
 }
 
 func isUltimateEncounter(name string) bool {
-	normalized := normalizeEncounterName(name)
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	if strings.Contains(normalized, "ultimate") {
+		return true
+	}
+	normalized = normalizeEncounterName(normalized)
 	if ultimateEncounterNames[normalized] {
 		return true
 	}
-	return strings.Contains(normalized, "ultimate")
+	return false
 }
 
 func normalizeEncounterName(name string) string {
