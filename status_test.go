@@ -25,6 +25,36 @@ func TestOrderedBestParsesShowsLatestTierAndUltimates(t *testing.T) {
 	}
 }
 
+func TestOrderedBestParsesIgnoresStaleUltimateEncounterIDs(t *testing.T) {
+	bests := map[int]BestParse{
+		1060: {EncounterName: "Zoraal Ja", RankPercent: 48.3},
+		1061: {EncounterName: "The Weapon's Refrain", RankPercent: 93.6},
+	}
+
+	got := orderedBestParses(bests)
+	if len(got) != 1 {
+		t.Fatalf("orderedBestParses() returned %d entries, want only real Ultimate", len(got))
+	}
+	if got[0].best.EncounterName != "The Weapon's Refrain" {
+		t.Fatalf("encounter = %q, want The Weapon's Refrain", got[0].best.EncounterName)
+	}
+}
+
+func TestOrderedBestParsesPrefersCanonicalUltimateEncounterID(t *testing.T) {
+	bests := map[int]BestParse{
+		1060: {EncounterName: "The Unending Coil of Bahamut", RankPercent: 100.0},
+		1073: {EncounterName: "The Unending Coil of Bahamut", RankPercent: 70.0},
+	}
+
+	got := orderedBestParses(bests)
+	if len(got) != 1 {
+		t.Fatalf("orderedBestParses() returned %d entries, want one deduplicated Ultimate", len(got))
+	}
+	if got[0].encounterID != 1073 || got[0].best.RankPercent != 70.0 {
+		t.Fatalf("deduplicated encounter = id %d pct %.1f, want id 1073 pct 70.0", got[0].encounterID, got[0].best.RankPercent)
+	}
+}
+
 func TestIsUltimateEncounter(t *testing.T) {
 	tests := []struct {
 		name          string
