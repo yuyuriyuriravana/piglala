@@ -31,6 +31,9 @@ const (
 	templateUnwatchSaveFailed       = "unwatch-save-failed"
 	templateUnwatchMissing          = "unwatch-missing"
 	templateUnwatchRemoved          = "unwatch-removed"
+	templatePingUsage               = "ping-usage"
+	templatePingSendFailed          = "ping-send-failed"
+	templatePingSent                = "ping-sent"
 )
 
 var messageTemplateNames = []string{
@@ -56,6 +59,9 @@ var messageTemplateNames = []string{
 	templateUnwatchSaveFailed,
 	templateUnwatchMissing,
 	templateUnwatchRemoved,
+	templatePingUsage,
+	templatePingSendFailed,
+	templatePingSent,
 }
 
 type MessageTemplates struct {
@@ -135,6 +141,9 @@ func (m *MessageTemplates) validate() error {
 		templateUnwatchSaveFailed:       emptyTemplateData{},
 		templateUnwatchMissing:          PlayerTemplateData{PlayerKey: "Yuyuri Yuri-ravana-OC", Name: "Yuyuri Yuri", Server: "ravana", Region: "OC"},
 		templateUnwatchRemoved:          PlayerTemplateData{PlayerKey: "Yuyuri Yuri-ravana-OC", Name: "Yuyuri Yuri", Server: "ravana", Region: "OC"},
+		templatePingUsage:               emptyTemplateData{},
+		templatePingSendFailed:          emptyTemplateData{},
+		templatePingSent:                emptyTemplateData{},
 	}
 	for name, data := range samples {
 		if _, err := m.render(name, data); err != nil {
