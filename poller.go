@@ -17,6 +17,7 @@ type Poller struct {
 	relevantZones  []RelevantZone
 	zonesUpdatedAt time.Time
 	messages       *MessageTemplates
+	llama          *LlamaClient
 }
 
 func (p *Poller) Run(ctx context.Context) {
@@ -137,11 +138,26 @@ func (p *Poller) checkAll(announce bool) {
 }
 
 func (p *Poller) sendAnnouncement(player WatchedPlayer, encounterName string, oldPct, newPct float64) {
-	msg, err := p.messages.ParseImprovement(player, encounterName, oldPct, newPct)
+	baseMsg, err := p.messages.ParseImprovement(player, encounterName, oldPct, newPct)
 	if err != nil {
 		log.Printf("template: parse improvement: %v", err)
 		return
 	}
+
+	msg := appendGeneratedNote(baseMsg, composeLlamaNote(context.Background(), p.llama, LlamaNoteRequest{
+		Kind: "parse_improvement",
+		Body: baseMsg,
+		Data: map[string]any{
+			"player_name":    player.Name,
+			"server":         player.Server,
+			"region":         player.Region,
+			"encounter_name": encounterName,
+			"previous":       formatPct(oldPct),
+			"current":        formatPct(newPct),
+		},
+		Instructions: "Add one short supportive observation focused on the improvement. Do not rewrite the notification body or invent causes, rankings, streaks, or future outcomes.",
+	}))
+
 	subscriptions := p.store.ListNotificationSubscriptions()
 	if len(subscriptions) == 0 {
 		log.Printf("poller: no subscribers for parse improvement player=%s encounter=%q old=%.1f new=%.1f", PlayerKey(player), encounterName, oldPct, newPct)

@@ -60,6 +60,13 @@ func main() {
 	log.Printf("store: loaded %d watched player(s) and %d player best set(s) from %s", playerCount, bestSetCount, storeDBPath)
 
 	ffClient := newFFLogsClient(fflogsClientID, fflogsClientSecret)
+	llamaClient := newLlamaClientFromEnv()
+	convStore, err := openConversationStore(getenvDefault("CONVERSATION_DB_PATH", defaultConversationDBPath))
+	if err != nil {
+		log.Fatalf("failed to open conversation store: %v", err)
+	}
+	defer convStore.Close()
+
 	log.Printf("discord: accepting commands from any accessible DM or guild channel")
 
 	session, err := discordgo.New("Bot " + token)
@@ -99,13 +106,13 @@ func main() {
 		switch verb {
 		case "!help":
 			log.Printf("command: !help requested by %s", m.Author.ID)
-			replyTemplate(s, m, messages, templateHelp, emptyTemplateData{})
+			replyTemplateFixed(s, m, messages, templateHelp, emptyTemplateData{}, llamaClient, convStore, "help", helpNoteInstructions)
 
 		case "!status":
 			players := store.ListPlayers()
 			log.Printf("command: !status requested by %s; watched_players=%d", m.Author.ID, len(players))
 			if len(players) == 0 {
-				replyTemplate(s, m, messages, templateStatusEmpty, emptyTemplateData{})
+				replyTemplateFixed(s, m, messages, templateStatusEmpty, emptyTemplateData{}, llamaClient, convStore, "status", statusNoteInstructions)
 				return
 			}
 			var sb strings.Builder
@@ -140,7 +147,7 @@ func main() {
 					}
 				}
 			}
-			if err := replyMessage(s, m, sb.String()); err != nil {
+			if err := replyMessageFixed(s, m, sb.String(), llamaClient, convStore, "status", statusNoteInstructions); err != nil {
 				log.Printf("discord: !status response failed for %s: %v", m.Author.ID, err)
 				return
 			}
@@ -151,14 +158,14 @@ func main() {
 			added, err := store.AddSubscription(targetType, targetID, displayName)
 			if err != nil {
 				log.Printf("command: !subscribe failed for target=%s:%s author=%s: %v", targetType, targetID, m.Author.ID, err)
-				replyTemplate(s, m, messages, templateSubscribeSaveFailed, emptyTemplateData{})
+				replyTemplate(s, m, messages, templateSubscribeSaveFailed, emptyTemplateData{}, llamaClient, convStore)
 				return
 			}
 			if added {
-				replyTemplate(s, m, messages, templateSubscribeAdded, emptyTemplateData{})
+				replyTemplate(s, m, messages, templateSubscribeAdded, emptyTemplateData{}, llamaClient, convStore)
 				log.Printf("command: !subscribe added target=%s:%s display_name=%q author=%s username=%q", targetType, targetID, displayName, m.Author.ID, m.Author.Username)
 			} else {
-				replyTemplate(s, m, messages, templateSubscribeAlready, emptyTemplateData{})
+				replyTemplate(s, m, messages, templateSubscribeAlready, emptyTemplateData{}, llamaClient, convStore)
 				log.Printf("command: !subscribe no-op for existing target=%s:%s display_name=%q author=%s username=%q", targetType, targetID, displayName, m.Author.ID, m.Author.Username)
 			}
 
@@ -167,14 +174,14 @@ func main() {
 			removed, err := store.RemoveSubscription(targetType, targetID)
 			if err != nil {
 				log.Printf("command: !unsubscribe failed for target=%s:%s author=%s: %v", targetType, targetID, m.Author.ID, err)
-				replyTemplate(s, m, messages, templateUnsubscribeSaveFailed, emptyTemplateData{})
+				replyTemplate(s, m, messages, templateUnsubscribeSaveFailed, emptyTemplateData{}, llamaClient, convStore)
 				return
 			}
 			if removed {
-				replyTemplate(s, m, messages, templateUnsubscribeRemoved, emptyTemplateData{})
+				replyTemplate(s, m, messages, templateUnsubscribeRemoved, emptyTemplateData{}, llamaClient, convStore)
 				log.Printf("command: !unsubscribe removed target=%s:%s display_name=%q author=%s username=%q", targetType, targetID, displayName, m.Author.ID, m.Author.Username)
 			} else {
-				replyTemplate(s, m, messages, templateUnsubscribeMissing, emptyTemplateData{})
+				replyTemplate(s, m, messages, templateUnsubscribeMissing, emptyTemplateData{}, llamaClient, convStore)
 				log.Printf("command: !unsubscribe no-op for missing target=%s:%s display_name=%q author=%s username=%q", targetType, targetID, displayName, m.Author.ID, m.Author.Username)
 			}
 
@@ -182,20 +189,20 @@ func main() {
 			player, err := parsePlayerArg(rest)
 			if err != nil {
 				log.Printf("command: !watch invalid arguments from %s: %v", m.Author.ID, err)
-				replyTemplate(s, m, messages, templateWatchUsage, emptyTemplateData{})
+				replyTemplate(s, m, messages, templateWatchUsage, emptyTemplateData{}, llamaClient, convStore)
 				return
 			}
 			added, err := store.AddPlayer(player)
 			if err != nil {
 				log.Printf("watch: %v", err)
-				replyTemplate(s, m, messages, templateWatchSaveFailed, emptyTemplateData{})
+				replyTemplate(s, m, messages, templateWatchSaveFailed, emptyTemplateData{}, llamaClient, convStore)
 				return
 			}
 			if !added {
-				replyTemplate(s, m, messages, templateWatchAlready, playerTemplateData(player))
+				replyTemplate(s, m, messages, templateWatchAlready, playerTemplateData(player), llamaClient, convStore)
 				log.Printf("command: !watch no-op for existing player=%s", PlayerKey(player))
 			} else {
-				replyTemplate(s, m, messages, templateWatchAdded, playerTemplateData(player))
+				replyTemplate(s, m, messages, templateWatchAdded, playerTemplateData(player), llamaClient, convStore)
 				log.Printf("command: !watch added player=%s", PlayerKey(player))
 			}
 
@@ -203,20 +210,20 @@ func main() {
 			player, err := parsePlayerArg(rest)
 			if err != nil {
 				log.Printf("command: !unwatch invalid arguments from %s: %v", m.Author.ID, err)
-				replyTemplate(s, m, messages, templateUnwatchUsage, emptyTemplateData{})
+				replyTemplate(s, m, messages, templateUnwatchUsage, emptyTemplateData{}, llamaClient, convStore)
 				return
 			}
 			removed, err := store.RemovePlayer(player)
 			if err != nil {
 				log.Printf("unwatch: %v", err)
-				replyTemplate(s, m, messages, templateUnwatchSaveFailed, emptyTemplateData{})
+				replyTemplate(s, m, messages, templateUnwatchSaveFailed, emptyTemplateData{}, llamaClient, convStore)
 				return
 			}
 			if !removed {
-				replyTemplate(s, m, messages, templateUnwatchMissing, playerTemplateData(player))
+				replyTemplate(s, m, messages, templateUnwatchMissing, playerTemplateData(player), llamaClient, convStore)
 				log.Printf("command: !unwatch no-op for missing player=%s", PlayerKey(player))
 			} else {
-				replyTemplate(s, m, messages, templateUnwatchRemoved, playerTemplateData(player))
+				replyTemplate(s, m, messages, templateUnwatchRemoved, playerTemplateData(player), llamaClient, convStore)
 				log.Printf("command: !unwatch removed player=%s", PlayerKey(player))
 			}
 
@@ -238,6 +245,7 @@ func main() {
 		session:  session,
 		interval: pollInterval,
 		messages: messages,
+		llama:    llamaClient,
 	}
 	go poller.Run(ctx)
 
@@ -353,24 +361,88 @@ func sendUserDM(s *discordgo.Session, userID, msg string) error {
 	return nil
 }
 
-func replyMessage(s *discordgo.Session, original *discordgo.MessageCreate, msg string) error {
+func replyMessage(s *discordgo.Session, original *discordgo.MessageCreate, msg string, llama *LlamaClient, convStore *ConversationStore) error {
 	if original == nil || original.Message == nil {
 		return fmt.Errorf("original message is missing")
 	}
-	if _, err := s.ChannelMessageSendReply(original.ChannelID, msg, original.Reference()); err != nil {
+
+	finalMsg := msg
+	if llama != nil {
+		prompt := fmt.Sprintf("The user sent: %q\nThe bot is about to respond with: %q\nPlease rewrite the bot's response to be more helpful, enthusiastic, and provide some interesting observations or FF14 flavor. Keep the core information intact. Format the response for Discord.", original.Content, msg)
+		aiMsg, err := llama.Chat(context.Background(), prompt)
+		if err != nil {
+			log.Printf("llama: failed to enhance reply: %v", err)
+		} else {
+			finalMsg = aiMsg
+			if convStore != nil {
+				_ = convStore.SaveExchange(context.Background(), ConversationExchange{
+					MessageID:        original.ID,
+					ChannelID:        original.ChannelID,
+					UserID:           original.Author.ID,
+					UserContent:      original.Content,
+					AssistantContent: finalMsg,
+					CreatedAt:        time.Now(),
+				})
+			}
+		}
+	}
+
+	if _, err := s.ChannelMessageSendReply(original.ChannelID, truncateDiscordMessage(finalMsg), original.Reference()); err != nil {
 		return fmt.Errorf("send reply: %w", err)
 	}
-	log.Printf("discord: sent reply channel=%s message_id=%s chars=%d", original.ChannelID, original.ID, len(msg))
+	log.Printf("discord: sent reply channel=%s message_id=%s chars=%d", original.ChannelID, original.ID, len(finalMsg))
 	return nil
 }
 
-func replyTemplate(s *discordgo.Session, original *discordgo.MessageCreate, messages *MessageTemplates, name string, data any) {
+const helpNoteInstructions = "Add one short helpful usage note. Do not list all commands again and do not offer multiple rewritten versions."
+
+const statusNoteInstructions = "Add one short observation about the parse status. Do not repeat the full status body, alter any parse values, add headings, or add extra per-player commentary."
+
+func replyMessageFixed(s *discordgo.Session, original *discordgo.MessageCreate, msg string, llama *LlamaClient, convStore *ConversationStore, kind, noteInstructions string) error {
+	if original == nil || original.Message == nil {
+		return fmt.Errorf("original message is missing")
+	}
+	userID := ""
+	if original.Author != nil {
+		userID = original.Author.ID
+	}
+
+	finalMsg := appendGeneratedNote(msg, composeLlamaNote(context.Background(), llama, LlamaNoteRequest{
+		Kind:            kind,
+		RecipientUserID: userID,
+		Body:            msg,
+		Data: map[string]any{
+			"user_message": original.Content,
+			"body":         msg,
+		},
+		Instructions: noteInstructions,
+	}))
+
+	if convStore != nil {
+		_ = convStore.SaveExchange(context.Background(), ConversationExchange{
+			MessageID:        original.ID,
+			ChannelID:        original.ChannelID,
+			UserID:           userID,
+			UserContent:      original.Content,
+			AssistantContent: finalMsg,
+			CreatedAt:        time.Now(),
+		})
+	}
+
+	if _, err := s.ChannelMessageSendReply(original.ChannelID, truncateDiscordMessage(finalMsg), original.Reference()); err != nil {
+		return fmt.Errorf("send reply: %w", err)
+	}
+	log.Printf("discord: sent fixed reply channel=%s message_id=%s chars=%d", original.ChannelID, original.ID, len(finalMsg))
+	return nil
+}
+
+func replyTemplate(s *discordgo.Session, original *discordgo.MessageCreate, messages *MessageTemplates, name string, data any, llama *LlamaClient, convStore *ConversationStore) {
 	msg, err := messages.Render(name, data)
 	if err != nil {
 		log.Printf("template: %s: %v", name, err)
 		return
 	}
-	if err := replyMessage(s, original, msg); err != nil {
+	if err := replyMessage(s, original, msg, llama, convStore); err != nil {
 		channelID := ""
 		messageID := ""
 		if original != nil {
@@ -380,7 +452,26 @@ func replyTemplate(s *discordgo.Session, original *discordgo.MessageCreate, mess
 		log.Printf("discord: template %s reply failed to channel=%s message_id=%s: %v", name, channelID, messageID, err)
 		return
 	}
-	log.Printf("discord: sent template=%s as reply channel=%s message_id=%s chars=%d", name, original.ChannelID, original.ID, len(msg))
+	log.Printf("discord: sent template=%s as reply channel=%s message_id=%s", name, original.ChannelID, original.ID)
+}
+
+func replyTemplateFixed(s *discordgo.Session, original *discordgo.MessageCreate, messages *MessageTemplates, name string, data any, llama *LlamaClient, convStore *ConversationStore, kind, noteInstructions string) {
+	msg, err := messages.Render(name, data)
+	if err != nil {
+		log.Printf("template: %s: %v", name, err)
+		return
+	}
+	if err := replyMessageFixed(s, original, msg, llama, convStore, kind, noteInstructions); err != nil {
+		channelID := ""
+		messageID := ""
+		if original != nil {
+			channelID = original.ChannelID
+			messageID = original.ID
+		}
+		log.Printf("discord: fixed template %s reply failed to channel=%s message_id=%s: %v", name, channelID, messageID, err)
+		return
+	}
+	log.Printf("discord: sent fixed template=%s as reply channel=%s message_id=%s", name, original.ChannelID, original.ID)
 }
 
 func playerTemplateData(player WatchedPlayer) PlayerTemplateData {
