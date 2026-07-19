@@ -1,0 +1,13 @@
+name: piglala
+
+services:
+  lavalink:
+    image: ghcr.io/lavalink-devs/lavalink:4.2.2
+    restart: unless-stopped
+    environment:
+      LAVALINK_PASSWORD: ${LAVALINK_PASSWORD:-youshallnotpass}
+      _JAVA_OPTIONS: -Xms128m -Xmx512m
+    volumes:
+      - ./lavalink/application.yml:/opt/Lavalink/application.yml:ro
+    ports:
+      - 127.0.0.1:2333:2333

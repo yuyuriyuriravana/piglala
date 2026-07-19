@@ -10,6 +10,8 @@ Commands are accepted from any DM or server channel the bot can access.
 
 - `!status` lists watched players and their recorded best parses for the latest Savage tier plus any Ultimates they have done.
 - `!help` shows all supported commands.
+- `!play <YouTube URL>` joins the command author's voice channel and plays that video's audio. A new request replaces the current track.
+- `!stop` stops playback and leaves the voice channel.
 - `!subscribe` subscribes the DM user, or the server channel where it is typed, to parse improvement notifications.
 - `!unsubscribe` removes the DM user, or the server channel where it is typed, from parse improvement notifications.
 - `!watch <name> <server> <region>` starts tracking a player.
@@ -24,11 +26,14 @@ Examples:
 !subscribe
 !unsubscribe
 !status
+!play https://www.youtube.com/watch?v=XFgpi7vynko
+!stop
 ```
 
 ## Requirements
 
 - Go 1.22 or newer
+- Docker with Compose (for the local Lavalink voice node)
 - A Discord application with a bot token
 - FFLogs API OAuth client credentials
 
@@ -45,8 +50,12 @@ The implementation requests direct-message, guild-message, and message-content g
 For a basic bot invite URL, replace `YOUR_CLIENT_ID` with your application's client ID:
 
 ```text
-https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=68608&integration_type=0&scope=bot
+https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=3214336&integration_type=0&scope=bot
 ```
+
+The bot needs View Channel, Send Messages, Read Message History, Connect, and
+Speak permissions. It also requests the non-privileged Guild Voice States
+gateway intent so it can find the command author's current voice channel.
 
 ## Environment
 
@@ -65,11 +74,16 @@ FFLOGS_CLIENT_SECRET=your_fflogs_client_secret
 MESSAGE_TEMPLATE_DIR=templates
 STORE_DB_PATH=store.sqlite3
 POLL_INTERVAL_MINUTES=30
+LAVALINK_ADDRESS=127.0.0.1:2333
+LAVALINK_PASSWORD=youshallnotpass
+LAVALINK_SECURE=false
 ```
 
 `POLL_INTERVAL_MINUTES` is optional and defaults to `30`.
 `MESSAGE_TEMPLATE_DIR` is required and defaults to the committed `templates` directory in `.env.example`. The bot loads all required Discord message templates from that directory and fails startup if any file is missing, invalid, or references unsupported placeholders.
 `STORE_DB_PATH` is optional and defaults to `store.sqlite3`.
+The Lavalink values are optional and default to the local node supplied by
+`compose.yaml`.
 
 Do not commit `.env`; it contains secrets.
 
@@ -142,7 +156,17 @@ These files are expected locally but are not committed:
 
 ## Run
 
-Install dependencies and start the bot:
+Start the DAVE-compatible voice node:
+
+```sh
+docker compose up -d lavalink
+```
+
+Lavalink handles Discord voice encryption and Opus audio delivery. The
+committed configuration installs the maintained YouTube source plugin and
+binds its API only to `127.0.0.1`.
+
+Install Go dependencies and start the bot:
 
 ```sh
 go mod tidy

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/disgoorg/disgolink/v3/lavalink"
 	"github.com/joho/godotenv"
 )
 
@@ -74,11 +76,23 @@ func main() {
 		log.Fatalf("failed to create Discord session: %v", err)
 	}
 	defer session.Close()
+	music := newMusicManagerFromEnv(session)
+	defer music.Close()
 
-	session.Identify.Intents = discordgo.IntentsDirectMessages | discordgo.IntentsGuildMessages | discordgo.IntentsMessageContent
+	session.Identify.Intents = discordgo.IntentsGuilds |
+		discordgo.IntentsDirectMessages |
+		discordgo.IntentsGuildMessages |
+		discordgo.IntentsGuildVoiceStates |
+		discordgo.IntentsMessageContent
 
 	session.AddHandler(func(s *discordgo.Session, r *discordgo.Ready) {
 		log.Printf("bot is online as %s#%s", r.User.Username, r.User.Discriminator)
+	})
+	session.AddHandler(func(_ *discordgo.Session, event *discordgo.VoiceStateUpdate) {
+		music.HandleVoiceStateUpdate(event)
+	})
+	session.AddHandler(func(_ *discordgo.Session, event *discordgo.VoiceServerUpdate) {
+		music.HandleVoiceServerUpdate(event)
 	})
 
 	session.AddHandler(func(s *discordgo.Session, m *discordgo.MessageCreate) {
@@ -107,6 +121,52 @@ func main() {
 		case "!help":
 			log.Printf("command: !help requested by %s", m.Author.ID)
 			replyTemplate(s, m, messages, templateHelp, emptyTemplateData{}, llamaClient, convStore, "help", helpNoteInstructions)
+
+		case "!play":
+			if rest == "" {
+				sendCommandReply(s, m, "Usage: `!play <YouTube URL>`")
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			track, err := music.Play(ctx, m, rest)
+			cancel()
+			if err != nil {
+				log.Printf("music: !play failed guild=%s channel=%s author=%s: %v", m.GuildID, m.ChannelID, m.Author.ID, err)
+				switch {
+				case errors.Is(err, errNotInVoice):
+					sendCommandReply(s, m, "Join a voice channel first, then send `!play <YouTube URL>`.")
+				case errors.Is(err, errMusicUnavailable):
+					sendCommandReply(s, m, "Music playback is temporarily unavailable.")
+				default:
+					sendCommandReply(s, m, "I couldn't play that YouTube URL: "+discordSafeText(err.Error()))
+				}
+				return
+			}
+			sendCommandReply(s, m, fmt.Sprintf(
+				"Now playing: **%s** (%s)",
+				discordSafeText(track.Info.Title),
+				formatMusicDuration(track.Info.Length),
+			))
+
+		case "!stop":
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			err := music.Stop(ctx, m.GuildID, m.Author.ID)
+			cancel()
+			if err != nil {
+				log.Printf("music: !stop failed guild=%s channel=%s author=%s: %v", m.GuildID, m.ChannelID, m.Author.ID, err)
+				switch {
+				case errors.Is(err, errNotInVoice):
+					sendCommandReply(s, m, "Join my voice channel first.")
+				case errors.Is(err, errNotPlaying):
+					sendCommandReply(s, m, "Nothing is currently playing.")
+				case errors.Is(err, errMusicUnavailable):
+					sendCommandReply(s, m, "Music playback is temporarily unavailable.")
+				default:
+					sendCommandReply(s, m, "I couldn't stop playback: "+discordSafeText(err.Error()))
+				}
+				return
+			}
+			sendCommandReply(s, m, "Playback stopped.")
 
 		case "!status":
 			players := store.ListPlayers()
@@ -235,6 +295,13 @@ func main() {
 	if err := session.Open(); err != nil {
 		log.Fatalf("failed to connect to Discord: %v", err)
 	}
+	musicStartCtx, musicStartCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	if session.State.User == nil {
+		log.Printf("music: Discord user state is not ready; playback will connect on the first command")
+	} else if err := music.Start(musicStartCtx, session.State.User.ID); err != nil {
+		log.Printf("music: startup connection unavailable: %v", err)
+	}
+	musicStartCancel()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -359,6 +426,35 @@ func sendUserDM(s *discordgo.Session, userID, msg string) error {
 	}
 	log.Printf("discord: sent DM to user=%s channel=%s chars=%d", userID, dm.ID, len(msg))
 	return nil
+}
+
+func sendCommandReply(s *discordgo.Session, original *discordgo.MessageCreate, message string) {
+	if original == nil || original.Message == nil {
+		return
+	}
+	if _, err := s.ChannelMessageSendReply(original.ChannelID, truncateDiscordMessage(message), original.Reference()); err != nil {
+		log.Printf("discord: command reply failed channel=%s message_id=%s: %v", original.ChannelID, original.ID, err)
+	}
+}
+
+func discordSafeText(value string) string {
+	value = strings.ReplaceAll(value, "@", "@\u200b")
+	value = strings.ReplaceAll(value, "`", "'")
+	return strings.TrimSpace(value)
+}
+
+func formatMusicDuration(duration lavalink.Duration) string {
+	if duration <= 0 {
+		return "live"
+	}
+	totalSeconds := duration.Seconds()
+	hours := totalSeconds / 3600
+	minutes := (totalSeconds % 3600) / 60
+	seconds := totalSeconds % 60
+	if hours > 0 {
+		return fmt.Sprintf("%d:%02d:%02d", hours, minutes, seconds)
+	}
+	return fmt.Sprintf("%d:%02d", minutes, seconds)
 }
 
 const helpNoteInstructions = "Add one short helpful usage note. Do not list all commands again and do not offer multiple rewritten versions."
