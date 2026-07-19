@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,6 +30,7 @@ func PlayerKey(p WatchedPlayer) string {
 type BestParse struct {
 	EncounterName string
 	RankPercent   float64
+	BestAmount    float64
 }
 
 type TrackedPlayerPollLog struct {
@@ -108,6 +110,7 @@ CREATE TABLE IF NOT EXISTS best_parses (
 	encounter_id INTEGER NOT NULL,
 	encounter_name TEXT NOT NULL,
 	rank_percent REAL NOT NULL,
+	best_amount REAL NOT NULL DEFAULT 0,
 	updated_at TEXT NOT NULL,
 	PRIMARY KEY (player_key, encounter_id)
 );
@@ -185,6 +188,12 @@ FROM notification_subscribers;
 `)
 	if err != nil {
 		return fmt.Errorf("init store db: %w", err)
+	}
+
+	if _, err := s.db.Exec(`ALTER TABLE best_parses ADD COLUMN best_amount REAL NOT NULL DEFAULT 0`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("migrate best_parses.best_amount: %w", err)
+		}
 	}
 	return nil
 }
@@ -267,9 +276,9 @@ func (s *Store) GetBest(playerKey string, encounterID int) BestParse {
 
 	var best BestParse
 	err := s.db.QueryRow(`
-SELECT encounter_name, rank_percent
+SELECT encounter_name, rank_percent, best_amount
 FROM best_parses
-WHERE player_key = ? AND encounter_id = ?`, playerKey, encounterID).Scan(&best.EncounterName, &best.RankPercent)
+WHERE player_key = ? AND encounter_id = ?`, playerKey, encounterID).Scan(&best.EncounterName, &best.RankPercent, &best.BestAmount)
 	if err != nil {
 		return BestParse{}
 	}
@@ -281,7 +290,7 @@ func (s *Store) GetAllBests(playerKey string) map[int]BestParse {
 	defer s.mu.Unlock()
 
 	rows, err := s.db.Query(`
-SELECT encounter_id, encounter_name, rank_percent
+SELECT encounter_id, encounter_name, rank_percent, best_amount
 FROM best_parses
 WHERE player_key = ?`, playerKey)
 	if err != nil {
@@ -293,7 +302,7 @@ WHERE player_key = ?`, playerKey)
 	for rows.Next() {
 		var encounterID int
 		var best BestParse
-		if err := rows.Scan(&encounterID, &best.EncounterName, &best.RankPercent); err != nil {
+		if err := rows.Scan(&encounterID, &best.EncounterName, &best.RankPercent, &best.BestAmount); err != nil {
 			return map[int]BestParse{}
 		}
 		out[encounterID] = best
@@ -304,18 +313,19 @@ WHERE player_key = ?`, playerKey)
 	return out
 }
 
-func (s *Store) UpdateBest(playerKey string, encounterID int, encounterName string, pct float64) error {
+func (s *Store) UpdateBest(playerKey string, encounterID int, encounterName string, pct, bestAmount float64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	_, err := s.db.Exec(`
-INSERT INTO best_parses (player_key, encounter_id, encounter_name, rank_percent, updated_at)
-VALUES (?, ?, ?, ?, ?)
+INSERT INTO best_parses (player_key, encounter_id, encounter_name, rank_percent, best_amount, updated_at)
+VALUES (?, ?, ?, ?, ?, ?)
 ON CONFLICT(player_key, encounter_id) DO UPDATE SET
 	encounter_name = excluded.encounter_name,
 	rank_percent = excluded.rank_percent,
+	best_amount = excluded.best_amount,
 	updated_at = excluded.updated_at`,
-		playerKey, encounterID, encounterName, pct, time.Now().UTC().Format(time.RFC3339Nano))
+		playerKey, encounterID, encounterName, pct, bestAmount, time.Now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return fmt.Errorf("update best parse: %w", err)
 	}

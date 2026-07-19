@@ -100,19 +100,24 @@ func (p *Poller) checkAll(announce bool) {
 					continue
 				}
 				prev := p.store.GetBest(key, r.EncounterID)
-				if r.RankPercent > prev.RankPercent {
-					if err := p.store.UpdateBest(key, r.EncounterID, r.EncounterName, r.RankPercent); err != nil {
-						log.Printf("store: %s: %v", key, err)
-						failures++
-						playerFailures++
-					}
-					updates++
-					playerUpdates++
-					log.Printf("poller: best updated player=%s encounter=%q old=%.1f new=%.1f announce=%t", key, r.EncounterName, prev.RankPercent, r.RankPercent, announce && prev.RankPercent > 0)
-					if announce && prev.RankPercent > 0 {
-						p.sendAnnouncement(player, r.EncounterName, prev.RankPercent, r.RankPercent)
-						announcements++
-					}
+				improved := r.BestAmount > prev.BestAmount
+				changed := improved || r.RankPercent != prev.RankPercent || r.EncounterName != prev.EncounterName
+				if !changed {
+					continue
+				}
+				if err := p.store.UpdateBest(key, r.EncounterID, r.EncounterName, r.RankPercent, r.BestAmount); err != nil {
+					log.Printf("store: %s: %v", key, err)
+					failures++
+					playerFailures++
+					continue
+				}
+				updates++
+				playerUpdates++
+				shouldAnnounce := announce && improved && prev.BestAmount > 0
+				log.Printf("poller: best updated player=%s encounter=%q old_pct=%v new_pct=%v old_amount=%v new_amount=%v improved=%t announce=%t", key, r.EncounterName, prev.RankPercent, r.RankPercent, prev.BestAmount, r.BestAmount, improved, shouldAnnounce)
+				if shouldAnnounce {
+					p.sendAnnouncement(player, r.EncounterName, prev.RankPercent, r.RankPercent)
+					announcements++
 				}
 			}
 		}
@@ -203,5 +208,5 @@ func formatPct(pct float64) string {
 			suffix = "rd"
 		}
 	}
-	return fmt.Sprintf("%d%s (%.1f%%)", n, suffix, pct)
+	return fmt.Sprintf("%d%s (%v%%)", n, suffix, pct)
 }

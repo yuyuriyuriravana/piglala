@@ -54,27 +54,27 @@ func TestSQLiteStoreBestParsesPersistAndUpdate(t *testing.T) {
 	player := WatchedPlayer{Name: "Yuyuri Yuri", Server: "ravana", Region: "OC"}
 	key := PlayerKey(player)
 
-	if err := store.UpdateBest(key, 101, "Vamp Fatale", 90.1); err != nil {
+	if err := store.UpdateBest(key, 101, "Vamp Fatale", 90.1, 12000); err != nil {
 		t.Fatalf("UpdateBest: %v", err)
 	}
-	if err := store.UpdateBest(key, 101, "Vamp Fatale", 95.4); err != nil {
+	if err := store.UpdateBest(key, 101, "Vamp Fatale", 95.4, 12500); err != nil {
 		t.Fatalf("second UpdateBest: %v", err)
 	}
-	if err := store.UpdateBest(key, 102, "Red Hot and Deep Blue", 88.8); err != nil {
+	if err := store.UpdateBest(key, 102, "Red Hot and Deep Blue", 88.8, 9800); err != nil {
 		t.Fatalf("third UpdateBest: %v", err)
 	}
 
 	best := store.GetBest(key, 101)
-	if best.EncounterName != "Vamp Fatale" || best.RankPercent != 95.4 {
-		t.Fatalf("best = %#v, want updated Vamp Fatale 95.4", best)
+	if best.EncounterName != "Vamp Fatale" || best.RankPercent != 95.4 || best.BestAmount != 12500 {
+		t.Fatalf("best = %#v, want updated Vamp Fatale 95.4 amount 12500", best)
 	}
 
 	all := store.GetAllBests(key)
 	if len(all) != 2 {
 		t.Fatalf("all bests = %d, want 2", len(all))
 	}
-	if all[102].EncounterName != "Red Hot and Deep Blue" || all[102].RankPercent != 88.8 {
-		t.Fatalf("encounter 102 = %#v, want Red Hot and Deep Blue 88.8", all[102])
+	if all[102].EncounterName != "Red Hot and Deep Blue" || all[102].RankPercent != 88.8 || all[102].BestAmount != 9800 {
+		t.Fatalf("encounter 102 = %#v, want Red Hot and Deep Blue 88.8 amount 9800", all[102])
 	}
 }
 
@@ -90,7 +90,7 @@ func TestSQLiteStoreRemovePlayerKeepsHistoricalBests(t *testing.T) {
 	if !added {
 		t.Fatal("AddPlayer added = false, want true")
 	}
-	if err := store.UpdateBest(key, 101, "Vamp Fatale", 90.1); err != nil {
+	if err := store.UpdateBest(key, 101, "Vamp Fatale", 90.1, 12000); err != nil {
 		t.Fatalf("UpdateBest: %v", err)
 	}
 
@@ -117,7 +117,7 @@ func TestSQLiteStoreStats(t *testing.T) {
 	} else if !added {
 		t.Fatal("AddPlayer added = false, want true")
 	}
-	if err := store.UpdateBest(PlayerKey(player), 101, "Vamp Fatale", 90.1); err != nil {
+	if err := store.UpdateBest(PlayerKey(player), 101, "Vamp Fatale", 90.1, 12000); err != nil {
 		t.Fatalf("UpdateBest: %v", err)
 	}
 

@@ -126,6 +126,7 @@ type CharacterRanking struct {
 	EncounterID   int
 	EncounterName string
 	RankPercent   float64
+	BestAmount    float64
 }
 
 const zonesQuery = `
@@ -302,6 +303,7 @@ func (c *fflogsClient) GetZoneRankings(name, serverSlug, serverRegion string, zo
 				Name string `json:"name"`
 			} `json:"encounter"`
 			RankPercent float64 `json:"rankPercent"`
+			BestAmount  float64 `json:"bestAmount"`
 		} `json:"rankings"`
 	}
 	if err := json.Unmarshal(resp.Data.CharacterData.Character.ZoneRankings, &zr); err != nil {
@@ -314,6 +316,7 @@ func (c *fflogsClient) GetZoneRankings(name, serverSlug, serverRegion string, zo
 			EncounterID:   r.Encounter.ID,
 			EncounterName: r.Encounter.Name,
 			RankPercent:   r.RankPercent,
+			BestAmount:    r.BestAmount,
 		})
 	}
 	return out, nil
