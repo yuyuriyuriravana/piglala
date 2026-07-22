@@ -1,6 +1,31 @@
 name: piglala
 
 services:
+  piglala:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: piglala:local
+    restart: unless-stopped
+    user: "${PIGLALA_UID:-1000}:${PIGLALA_GID:-1000}"
+    env_file:
+      - .env
+    environment:
+      TZ: ${TZ:-Asia/Kuala_Lumpur}
+      MESSAGE_TEMPLATE_DIR: /app/templates
+      STORE_DB_PATH: /data/store.sqlite3
+      LAVALINK_ADDRESS: lavalink:2333
+    volumes:
+      - ./data:/data
+      - ./templates:/app/templates:ro
+    depends_on:
+      - lavalink
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
   lavalink:
     image: ghcr.io/lavalink-devs/lavalink:4.2.2
     restart: unless-stopped

@@ -4,11 +4,10 @@
 !.env.example
 
 # Runtime state
+data/
 store.json
 store.sqlite3
 store.sqlite3-*
-conversations.sqlite3
-conversations.sqlite3-*
 *.service
 *.log
 *.pid
