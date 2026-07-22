@@ -63,11 +63,7 @@ func main() {
 
 	ffClient := newFFLogsClient(fflogsClientID, fflogsClientSecret)
 	llamaClient := newLlamaClientFromEnv()
-	convStore, err := openConversationStore(getenvDefault("CONVERSATION_DB_PATH", defaultConversationDBPath))
-	if err != nil {
-		log.Fatalf("failed to open conversation store: %v", err)
-	}
-	defer convStore.Close()
+	priceService := newPriceServiceFromEnv(store)
 
 	log.Printf("discord: accepting commands from any accessible DM or guild channel")
 
@@ -120,7 +116,10 @@ func main() {
 		switch verb {
 		case "!help":
 			log.Printf("command: !help requested by %s", m.Author.ID)
-			replyTemplate(s, m, messages, templateHelp, emptyTemplateData{}, llamaClient, convStore, "help", helpNoteInstructions)
+			replyTemplate(s, m, messages, templateHelp, emptyTemplateData{}, llamaClient, store, "help", helpNoteInstructions)
+
+		case "!price":
+			handlePriceCommand(s, m, rest, priceService, messages, llamaClient, store)
 
 		case "!play":
 			if rest == "" {
@@ -172,7 +171,7 @@ func main() {
 			players := store.ListPlayers()
 			log.Printf("command: !status requested by %s; watched_players=%d", m.Author.ID, len(players))
 			if len(players) == 0 {
-				replyTemplate(s, m, messages, templateStatusEmpty, emptyTemplateData{}, llamaClient, convStore, "status", statusNoteInstructions)
+				replyTemplate(s, m, messages, templateStatusEmpty, emptyTemplateData{}, llamaClient, store, "status", statusNoteInstructions)
 				return
 			}
 			var sb strings.Builder
@@ -207,7 +206,7 @@ func main() {
 					}
 				}
 			}
-			if err := replyMessage(s, m, sb.String(), llamaClient, convStore, "status", statusNoteInstructions); err != nil {
+			if err := replyMessage(s, m, sb.String(), llamaClient, store, "status", statusNoteInstructions); err != nil {
 				log.Printf("discord: !status response failed for %s: %v", m.Author.ID, err)
 				return
 			}
@@ -218,14 +217,14 @@ func main() {
 			added, err := store.AddSubscription(targetType, targetID, displayName)
 			if err != nil {
 				log.Printf("command: !subscribe failed for target=%s:%s author=%s: %v", targetType, targetID, m.Author.ID, err)
-				replyTemplate(s, m, messages, templateSubscribeSaveFailed, emptyTemplateData{}, llamaClient, convStore, "subscription", subscriptionNoteInstructions)
+				replyTemplate(s, m, messages, templateSubscribeSaveFailed, emptyTemplateData{}, llamaClient, store, "subscription", subscriptionNoteInstructions)
 				return
 			}
 			if added {
-				replyTemplate(s, m, messages, templateSubscribeAdded, emptyTemplateData{}, llamaClient, convStore, "subscription", subscriptionNoteInstructions)
+				replyTemplate(s, m, messages, templateSubscribeAdded, emptyTemplateData{}, llamaClient, store, "subscription", subscriptionNoteInstructions)
 				log.Printf("command: !subscribe added target=%s:%s display_name=%q author=%s username=%q", targetType, targetID, displayName, m.Author.ID, m.Author.Username)
 			} else {
-				replyTemplate(s, m, messages, templateSubscribeAlready, emptyTemplateData{}, llamaClient, convStore, "subscription", subscriptionNoteInstructions)
+				replyTemplate(s, m, messages, templateSubscribeAlready, emptyTemplateData{}, llamaClient, store, "subscription", subscriptionNoteInstructions)
 				log.Printf("command: !subscribe no-op for existing target=%s:%s display_name=%q author=%s username=%q", targetType, targetID, displayName, m.Author.ID, m.Author.Username)
 			}
 
@@ -234,14 +233,14 @@ func main() {
 			removed, err := store.RemoveSubscription(targetType, targetID)
 			if err != nil {
 				log.Printf("command: !unsubscribe failed for target=%s:%s author=%s: %v", targetType, targetID, m.Author.ID, err)
-				replyTemplate(s, m, messages, templateUnsubscribeSaveFailed, emptyTemplateData{}, llamaClient, convStore, "subscription", subscriptionNoteInstructions)
+				replyTemplate(s, m, messages, templateUnsubscribeSaveFailed, emptyTemplateData{}, llamaClient, store, "subscription", subscriptionNoteInstructions)
 				return
 			}
 			if removed {
-				replyTemplate(s, m, messages, templateUnsubscribeRemoved, emptyTemplateData{}, llamaClient, convStore, "subscription", subscriptionNoteInstructions)
+				replyTemplate(s, m, messages, templateUnsubscribeRemoved, emptyTemplateData{}, llamaClient, store, "subscription", subscriptionNoteInstructions)
 				log.Printf("command: !unsubscribe removed target=%s:%s display_name=%q author=%s username=%q", targetType, targetID, displayName, m.Author.ID, m.Author.Username)
 			} else {
-				replyTemplate(s, m, messages, templateUnsubscribeMissing, emptyTemplateData{}, llamaClient, convStore, "subscription", subscriptionNoteInstructions)
+				replyTemplate(s, m, messages, templateUnsubscribeMissing, emptyTemplateData{}, llamaClient, store, "subscription", subscriptionNoteInstructions)
 				log.Printf("command: !unsubscribe no-op for missing target=%s:%s display_name=%q author=%s username=%q", targetType, targetID, displayName, m.Author.ID, m.Author.Username)
 			}
 
@@ -249,20 +248,20 @@ func main() {
 			player, err := parsePlayerArg(rest)
 			if err != nil {
 				log.Printf("command: !watch invalid arguments from %s: %v", m.Author.ID, err)
-				replyTemplate(s, m, messages, templateWatchUsage, emptyTemplateData{}, llamaClient, convStore, "watch", watchNoteInstructions)
+				replyTemplate(s, m, messages, templateWatchUsage, emptyTemplateData{}, llamaClient, store, "watch", watchNoteInstructions)
 				return
 			}
 			added, err := store.AddPlayer(player)
 			if err != nil {
 				log.Printf("watch: %v", err)
-				replyTemplate(s, m, messages, templateWatchSaveFailed, emptyTemplateData{}, llamaClient, convStore, "watch", watchNoteInstructions)
+				replyTemplate(s, m, messages, templateWatchSaveFailed, emptyTemplateData{}, llamaClient, store, "watch", watchNoteInstructions)
 				return
 			}
 			if !added {
-				replyTemplate(s, m, messages, templateWatchAlready, playerTemplateData(player), llamaClient, convStore, "watch", watchNoteInstructions)
+				replyTemplate(s, m, messages, templateWatchAlready, playerTemplateData(player), llamaClient, store, "watch", watchNoteInstructions)
 				log.Printf("command: !watch no-op for existing player=%s", PlayerKey(player))
 			} else {
-				replyTemplate(s, m, messages, templateWatchAdded, playerTemplateData(player), llamaClient, convStore, "watch", watchNoteInstructions)
+				replyTemplate(s, m, messages, templateWatchAdded, playerTemplateData(player), llamaClient, store, "watch", watchNoteInstructions)
 				log.Printf("command: !watch added player=%s", PlayerKey(player))
 			}
 
@@ -270,20 +269,20 @@ func main() {
 			player, err := parsePlayerArg(rest)
 			if err != nil {
 				log.Printf("command: !unwatch invalid arguments from %s: %v", m.Author.ID, err)
-				replyTemplate(s, m, messages, templateUnwatchUsage, emptyTemplateData{}, llamaClient, convStore, "watch", watchNoteInstructions)
+				replyTemplate(s, m, messages, templateUnwatchUsage, emptyTemplateData{}, llamaClient, store, "watch", watchNoteInstructions)
 				return
 			}
 			removed, err := store.RemovePlayer(player)
 			if err != nil {
 				log.Printf("unwatch: %v", err)
-				replyTemplate(s, m, messages, templateUnwatchSaveFailed, emptyTemplateData{}, llamaClient, convStore, "watch", watchNoteInstructions)
+				replyTemplate(s, m, messages, templateUnwatchSaveFailed, emptyTemplateData{}, llamaClient, store, "watch", watchNoteInstructions)
 				return
 			}
 			if !removed {
-				replyTemplate(s, m, messages, templateUnwatchMissing, playerTemplateData(player), llamaClient, convStore, "watch", watchNoteInstructions)
+				replyTemplate(s, m, messages, templateUnwatchMissing, playerTemplateData(player), llamaClient, store, "watch", watchNoteInstructions)
 				log.Printf("command: !unwatch no-op for missing player=%s", PlayerKey(player))
 			} else {
-				replyTemplate(s, m, messages, templateUnwatchRemoved, playerTemplateData(player), llamaClient, convStore, "watch", watchNoteInstructions)
+				replyTemplate(s, m, messages, templateUnwatchRemoved, playerTemplateData(player), llamaClient, store, "watch", watchNoteInstructions)
 				log.Printf("command: !unwatch removed player=%s", PlayerKey(player))
 			}
 
@@ -306,6 +305,14 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	itemCatalogReady := make(chan struct{})
+	go func() {
+		defer close(itemCatalogReady)
+		if err := priceService.Warm(ctx); err != nil && ctx.Err() == nil {
+			log.Printf("items: startup catalog refresh failed: %v", err)
+		}
+	}()
+
 	poller := &Poller{
 		store:    store,
 		fflogs:   ffClient,
@@ -319,6 +326,7 @@ func main() {
 	log.Printf("bot running, polling every %v", pollInterval)
 	waitForShutdown()
 	cancel()
+	<-itemCatalogReady
 }
 
 func parsePlayerArg(s string) (WatchedPlayer, error) {
@@ -465,7 +473,19 @@ const subscriptionNoteInstructions = "Summarize the fixed subscription response 
 
 const watchNoteInstructions = "Summarize the fixed watch-list response in one short sentence. Do not add new instructions, alternatives, roleplay, headings, or extra Discord formatting."
 
-func replyMessage(s *discordgo.Session, original *discordgo.MessageCreate, msg string, llama *LlamaClient, convStore *ConversationStore, kind, noteInstructions string) error {
+const priceNoteInstructions = "Analyze the supplied completed-sale history and current listings. In one cautious sentence, say whether the cheapest current listing appears low, high, or near recent sale prices and give a practical buy-or-sell implication. Distinguish listings from completed sales, mention sparse or stale data when relevant, and never predict future prices or invent missing values."
+
+func replyMessage(s *discordgo.Session, original *discordgo.MessageCreate, msg string, llama *LlamaClient, store *Store, kind, noteInstructions string) error {
+	data := map[string]any{
+		"body": msg,
+	}
+	if original != nil {
+		data["user_message"] = original.Content
+	}
+	return replyMessageWithData(s, original, msg, llama, store, kind, noteInstructions, data)
+}
+
+func replyMessageWithData(s *discordgo.Session, original *discordgo.MessageCreate, msg string, llama *LlamaClient, store *Store, kind, noteInstructions string, noteData any) error {
 	if original == nil || original.Message == nil {
 		return fmt.Errorf("original message is missing")
 	}
@@ -478,15 +498,12 @@ func replyMessage(s *discordgo.Session, original *discordgo.MessageCreate, msg s
 		Kind:            kind,
 		RecipientUserID: userID,
 		Body:            msg,
-		Data: map[string]any{
-			"user_message": original.Content,
-			"body":         msg,
-		},
-		Instructions: noteInstructions,
+		Data:            noteData,
+		Instructions:    noteInstructions,
 	}))
 
-	if convStore != nil {
-		_ = convStore.SaveExchange(context.Background(), ConversationExchange{
+	if store != nil {
+		_ = store.SaveExchange(context.Background(), ConversationExchange{
 			MessageID:        original.ID,
 			ChannelID:        original.ChannelID,
 			UserID:           userID,
@@ -503,13 +520,51 @@ func replyMessage(s *discordgo.Session, original *discordgo.MessageCreate, msg s
 	return nil
 }
 
-func replyTemplate(s *discordgo.Session, original *discordgo.MessageCreate, messages *MessageTemplates, name string, data any, llama *LlamaClient, convStore *ConversationStore, kind, noteInstructions string) {
+func handlePriceCommand(s *discordgo.Session, original *discordgo.MessageCreate, query string, prices *PriceService, messages *MessageTemplates, llama *LlamaClient, store *Store) {
+	if strings.TrimSpace(query) == "" {
+		replyTemplate(s, original, messages, templatePriceUsage, emptyTemplateData{}, nil, store, "price", "")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	lookup, err := prices.Lookup(ctx, query)
+	cancel()
+	if err != nil {
+		var resolutionErr *ItemResolutionError
+		if errors.As(err, &resolutionErr) {
+			data := priceResolutionTemplateData(resolutionErr)
+			templateName := templatePriceNotFound
+			if len(data.Suggestions) > 0 {
+				templateName = templatePriceAmbiguous
+			}
+			replyTemplate(s, original, messages, templateName, data, nil, store, "price", "")
+			log.Printf("price: item resolution failed query=%q suggestions=%d", query, len(data.Suggestions))
+			return
+		}
+		replyTemplate(s, original, messages, templatePriceFetchFailed, emptyTemplateData{}, nil, store, "price", "")
+		log.Printf("price: lookup failed query=%q: %v", query, err)
+		return
+	}
+
+	body, err := messages.Render(templatePriceResult, lookup.TemplateData(time.Now()))
+	if err != nil {
+		log.Printf("template: %s: %v", templatePriceResult, err)
+		return
+	}
+	if err := replyMessageWithData(s, original, body, llama, store, "price", priceNoteInstructions, lookup.AnalysisData()); err != nil {
+		log.Printf("discord: !price response failed query=%q channel=%s message_id=%s: %v", query, original.ChannelID, original.ID, err)
+		return
+	}
+	log.Printf("price: response sent query=%q item_id=%d item=%q", query, lookup.Match.Item.ID, lookup.Match.Item.Name)
+}
+
+func replyTemplate(s *discordgo.Session, original *discordgo.MessageCreate, messages *MessageTemplates, name string, data any, llama *LlamaClient, store *Store, kind, noteInstructions string) {
 	msg, err := messages.Render(name, data)
 	if err != nil {
 		log.Printf("template: %s: %v", name, err)
 		return
 	}
-	if err := replyMessage(s, original, msg, llama, convStore, kind, noteInstructions); err != nil {
+	if err := replyMessage(s, original, msg, llama, store, kind, noteInstructions); err != nil {
 		channelID := ""
 		messageID := ""
 		if original != nil {

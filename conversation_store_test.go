@@ -8,11 +8,11 @@ import (
 	"time"
 )
 
-func TestConversationStoreSaveExchange(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "conversations.sqlite3")
-	store, err := openConversationStore(dbPath)
+func TestStoreSaveExchange(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "store.sqlite3")
+	store, err := loadStore(dbPath)
 	if err != nil {
-		t.Fatalf("openConversationStore: %v", err)
+		t.Fatalf("loadStore: %v", err)
 	}
 	defer store.Close()
 
@@ -44,11 +44,11 @@ func TestConversationStoreSaveExchange(t *testing.T) {
 	}
 }
 
-func TestConversationStoreSaveExchangeUpsertsMessage(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "conversations.sqlite3")
-	store, err := openConversationStore(dbPath)
+func TestStoreSaveExchangeUpsertsMessage(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "store.sqlite3")
+	store, err := loadStore(dbPath)
 	if err != nil {
-		t.Fatalf("openConversationStore: %v", err)
+		t.Fatalf("loadStore: %v", err)
 	}
 	defer store.Close()
 

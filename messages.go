@@ -34,6 +34,11 @@ const (
 	templatePingUsage               = "ping-usage"
 	templatePingSendFailed          = "ping-send-failed"
 	templatePingSent                = "ping-sent"
+	templatePriceUsage              = "price-usage"
+	templatePriceNotFound           = "price-not-found"
+	templatePriceAmbiguous          = "price-ambiguous"
+	templatePriceFetchFailed        = "price-fetch-failed"
+	templatePriceResult             = "price-result"
 )
 
 var messageTemplateNames = []string{
@@ -62,6 +67,11 @@ var messageTemplateNames = []string{
 	templatePingUsage,
 	templatePingSendFailed,
 	templatePingSent,
+	templatePriceUsage,
+	templatePriceNotFound,
+	templatePriceAmbiguous,
+	templatePriceFetchFailed,
+	templatePriceResult,
 }
 
 type MessageTemplates struct {
@@ -144,6 +154,19 @@ func (m *MessageTemplates) validate() error {
 		templatePingUsage:               emptyTemplateData{},
 		templatePingSendFailed:          emptyTemplateData{},
 		templatePingSent:                emptyTemplateData{},
+		templatePriceUsage:              emptyTemplateData{},
+		templatePriceNotFound:           PriceQueryTemplateData{Query: "dancing wings"},
+		templatePriceAmbiguous:          PriceQueryTemplateData{Query: "wall shelf", Suggestions: []string{"Antique Wall Shelf", "Mounted Bookshelf"}},
+		templatePriceFetchFailed:        emptyTemplateData{},
+		templatePriceResult: PriceTemplateData{
+			ItemName:       "Antique Wall Shelf",
+			UniversalisURL: "https://universalis.app/market/35573",
+			Regions: []PriceRegionTemplateData{
+				{Name: "Oceania", HasListing: true, Price: "39,998", Quality: "NQ", World: "Sophia", Age: "3 days ago"},
+				{Name: "Japan"},
+				{Name: "Europe", Error: true},
+			},
+		},
 	}
 	for name, data := range samples {
 		if _, err := m.render(name, data); err != nil {

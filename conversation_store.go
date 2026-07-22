@@ -2,19 +2,9 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
-	"strings"
 	"time"
-
-	_ "github.com/mattn/go-sqlite3"
 )
-
-const defaultConversationDBPath = "conversations.sqlite3"
-
-type ConversationStore struct {
-	db *sql.DB
-}
 
 type ConversationExchange struct {
 	MessageID        string
@@ -25,54 +15,10 @@ type ConversationExchange struct {
 	CreatedAt        time.Time
 }
 
-func openConversationStore(path string) (*ConversationStore, error) {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		path = defaultConversationDBPath
-	}
+func (s *Store) SaveExchange(ctx context.Context, exchange ConversationExchange) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	db, err := sql.Open("sqlite3", path)
-	if err != nil {
-		return nil, fmt.Errorf("open conversation db: %w", err)
-	}
-
-	store := &ConversationStore{db: db}
-	if err := store.init(context.Background()); err != nil {
-		db.Close()
-		return nil, err
-	}
-	return store, nil
-}
-
-func (s *ConversationStore) Close() error {
-	return s.db.Close()
-}
-
-func (s *ConversationStore) init(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `
-CREATE TABLE IF NOT EXISTS conversation_exchanges (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	message_id TEXT NOT NULL UNIQUE,
-	channel_id TEXT NOT NULL,
-	user_id TEXT NOT NULL,
-	user_content TEXT NOT NULL,
-	assistant_content TEXT NOT NULL,
-	created_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_conversation_exchanges_channel_created
-ON conversation_exchanges(channel_id, created_at);
-
-CREATE INDEX IF NOT EXISTS idx_conversation_exchanges_user_created
-ON conversation_exchanges(user_id, created_at);
-`)
-	if err != nil {
-		return fmt.Errorf("init conversation db: %w", err)
-	}
-	return nil
-}
-
-func (s *ConversationStore) SaveExchange(ctx context.Context, exchange ConversationExchange) error {
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO conversation_exchanges (
 	message_id,

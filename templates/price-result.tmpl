@@ -1,0 +1,14 @@
+⚖️ **{{.ItemName}}**
+Global Market Comparison
+[View on Universalis]({{.UniversalisURL}})
+{{if .MatchedQuery}}
+Matched `{{.MatchedQuery}}` to **{{.ItemName}}**.
+{{end}}{{range .Regions}}
+📍 **{{.Name}}**
+{{if .HasListing}}💰 {{.Price}} Gil [{{.Quality}}]
+🌍 {{.World}}
+🕒 {{.Age}}
+{{else if .Error}}⚠️ Price data unavailable.
+{{else}}No current listings found.
+{{end}}{{end}}
+Data via Universalis • Values are per-unit

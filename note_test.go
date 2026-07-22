@@ -41,7 +41,7 @@ func TestComposeLlamaNoteUsesFixedBodyAndData(t *testing.T) {
 		t.Fatalf("len(messages) = %d, want 1", len(got.Messages))
 	}
 	prompt := got.Messages[0].Content
-	for _, want := range []string{"fixed_body:", body, `"command": "!status"`, statusNoteInstructions, "Do not output headings"} {
+	for _, want := range []string{"fixed_body:", body, `"command": "!status"`, statusNoteInstructions, "Do not output headings", "untrusted facts"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q: %s", want, prompt)
 		}

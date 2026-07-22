@@ -155,6 +155,22 @@ ON discord_message_logs(received_at);
 CREATE INDEX IF NOT EXISTS idx_discord_message_logs_channel_received
 ON discord_message_logs(channel_id, received_at);
 
+CREATE TABLE IF NOT EXISTS conversation_exchanges (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	message_id TEXT NOT NULL UNIQUE,
+	channel_id TEXT NOT NULL,
+	user_id TEXT NOT NULL,
+	user_content TEXT NOT NULL,
+	assistant_content TEXT NOT NULL,
+	created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_exchanges_channel_created
+ON conversation_exchanges(channel_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_exchanges_user_created
+ON conversation_exchanges(user_id, created_at);
+
 CREATE TABLE IF NOT EXISTS notification_subscribers (
 	user_id TEXT PRIMARY KEY,
 	username TEXT NOT NULL,
@@ -169,6 +185,21 @@ CREATE TABLE IF NOT EXISTS notification_subscriptions (
 	subscribed_at TEXT NOT NULL,
 	updated_at TEXT NOT NULL,
 	PRIMARY KEY (target_type, target_id)
+);
+
+CREATE TABLE IF NOT EXISTS item_catalog (
+	item_id INTEGER PRIMARY KEY,
+	name TEXT NOT NULL,
+	normalized_name TEXT NOT NULL,
+	updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_item_catalog_normalized_name
+ON item_catalog(normalized_name);
+
+CREATE TABLE IF NOT EXISTS item_catalog_metadata (
+	key TEXT PRIMARY KEY,
+	value TEXT NOT NULL
 );
 
 INSERT OR IGNORE INTO notification_subscriptions (
