@@ -1,8 +1,8 @@
 # Piglala Discord Bot
 
-A small Go Discord bot that watches Final Fantasy XIV characters on FFLogs and sends a Discord DM when a watched player improves a recorded parse.
+A small Go Discord bot that watches Final Fantasy XIV characters on FFLogs and sends one Discord notification for each newly observed high-end fight result.
 
-The bot stores its local watch list, notification subscribers, recorded best parses, tracked-player poll history, and received Discord messages in a SQLite database. The default database file is `store.sqlite3`, which is runtime state and is intentionally ignored by git.
+The bot stores its local watch list, notification subscribers, recorded best parses, processed fight identities, tracked-player poll history, and received Discord messages in a SQLite database. The default database file is `store.sqlite3`, which is runtime state and is intentionally ignored by git.
 
 ## Commands
 
@@ -13,8 +13,8 @@ Commands are accepted from any DM or server channel the bot can access.
 - `!play <YouTube URL>` joins the command author's voice channel and plays that video's audio. A new request replaces the current track.
 - `!price <item name>` compares the cheapest listing in Oceania, Japan, North America, and Europe, then adds a short llama-server observation based on recent completed sales.
 - `!stop` stops playback and leaves the voice channel.
-- `!subscribe` subscribes the DM user, or the server channel where it is typed, to parse improvement notifications.
-- `!unsubscribe` removes the DM user, or the server channel where it is typed, from parse improvement notifications.
+- `!subscribe` subscribes the DM user, or the server channel where it is typed, to new parse result notifications.
+- `!unsubscribe` removes the DM user, or the server channel where it is typed, from parse result notifications.
 - `!watch <name> <server> <region>` starts tracking a player.
 - `!unwatch <name> <server> <region>` stops tracking a player.
 
@@ -110,7 +110,7 @@ Do not commit `.env`; it contains secrets.
 
 ## Polling
 
-On startup, the bot fetches relevant FFLogs zones and records current bests without sending improvement notifications. After that, it polls every `POLL_INTERVAL_MINUTES`.
+On startup, the bot fetches relevant FFLogs zones and records recent individual fight results without sending notifications. After that, it polls every `POLL_INTERVAL_MINUTES`.
 
 The poller tracks FFLogs zone/difficulty pairs whose difficulty name is:
 
@@ -118,7 +118,9 @@ The poller tracks FFLogs zone/difficulty pairs whose difficulty name is:
 - `Extreme`
 - `Ultimate`
 
-When a watched character's `rankPercent` improves for an encounter, the bot sends a DM to each user who subscribed in DMs and posts to each subscribed channel.
+For each watched character, the poller reads recent public reports and their completed fight rankings. Results are grouped by encounter and absolute fight start time, so the same pull is recognized even when more than one player uploads it. A fight stores multiple tracked-player results and has one announcement state.
+
+Each newly observed Savage, Extreme, or Ultimate fight produces one table containing every tracked player found in that fight, including job, individual DPS, current parse percentile, and an FFLogs link. Duplicate uploads and later percentile recalculations do not resend the fight. The message warns that percentiles are provisional and may change until FFLogs locks them in. A better individual amount also updates the value used by `!status`.
 
 ## Market Price Lookup
 
@@ -140,7 +142,7 @@ should be considered before acting.
 
 Discord messages are managed as Go `text/template` files under `MESSAGE_TEMPLATE_DIR`. The app expects these fixed filenames:
 
-- `parse-improvement.tmpl`
+- `parse-fight-result.tmpl`
 - `help.tmpl`
 - `status-empty.tmpl`
 - `status-player.tmpl`
@@ -168,14 +170,11 @@ Discord messages are managed as Go `text/template` files under `MESSAGE_TEMPLATE
 - `price-fetch-failed.tmpl`
 - `price-result.tmpl`
 
-Parse improvement templates support:
+Parse result templates support:
 
-- `{{.PlayerName}}`
-- `{{.Server}}`
-- `{{.Region}}`
 - `{{.EncounterName}}`
-- `{{.OldPercent}}`
-- `{{.NewPercent}}`
+- `{{.Table}}`
+- `{{.ReportURL}}`
 
 Player command/status templates support:
 
