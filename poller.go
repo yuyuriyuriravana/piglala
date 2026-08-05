@@ -4,10 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
+	"sort"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
 )
+
+const recentParseReportLimit = 10
 
 type Poller struct {
 	store          *Store
@@ -21,7 +25,7 @@ type Poller struct {
 }
 
 func (p *Poller) Run(ctx context.Context) {
-	// Populate bests on first run without announcing, then poll on interval.
+	// Record recent runs on first startup without announcing, then poll on interval.
 	log.Println("poller: starting initial baseline check")
 	p.checkAll(false)
 	ticker := time.NewTicker(p.interval)
@@ -73,53 +77,41 @@ func (p *Poller) checkAll(announce bool) {
 		return
 	}
 
-	totalRankings := 0
-	updates := 0
+	totalFights := 0
+	newFights := 0
 	announcements := 0
 	failures := 0
+	var observations []discoveredParseFight
 	for _, player := range players {
 		playerStart := time.Now()
 		key := PlayerKey(player)
-		playerRankings := 0
-		playerUpdates := 0
 		playerFailures := 0
-		for _, zone := range p.relevantZones {
-			log.Printf("fflogs: fetching rankings player=%s zone=%q difficulty=%q content_type=%q", key, zone.ZoneName, zone.DifficultyName, zone.ContentType)
-			rankings, err := p.fflogs.GetZoneRankings(player.Name, player.Server, player.Region, zone)
-			if err != nil {
-				log.Printf("fflogs: %s %s: %v", key, zone.ZoneName, err)
-				failures++
-				playerFailures++
-				continue
-			}
-			log.Printf("fflogs: fetched %d ranking(s) player=%s zone=%q difficulty=%q content_type=%q", len(rankings), key, zone.ZoneName, zone.DifficultyName, zone.ContentType)
-			totalRankings += len(rankings)
-			playerRankings += len(rankings)
-			for _, r := range rankings {
-				if r.RankPercent == 0 {
-					continue
-				}
-				prev := p.store.GetBest(key, r.EncounterID)
-				improved := r.BestAmount > prev.BestAmount
-				changed := improved || r.RankPercent != prev.RankPercent || r.EncounterName != prev.EncounterName
-				if !changed {
-					continue
-				}
-				if err := p.store.UpdateBest(key, r.EncounterID, r.EncounterName, r.RankPercent, r.BestAmount); err != nil {
-					log.Printf("store: %s: %v", key, err)
-					failures++
-					playerFailures++
-					continue
-				}
-				updates++
-				playerUpdates++
-				shouldAnnounce := announce && improved && prev.BestAmount > 0
-				log.Printf("poller: best updated player=%s encounter=%q old_pct=%v new_pct=%v old_amount=%v new_amount=%v improved=%t announce=%t", key, r.EncounterName, prev.RankPercent, r.RankPercent, prev.BestAmount, r.BestAmount, improved, shouldAnnounce)
-				if shouldAnnounce {
-					p.sendAnnouncement(player, r.EncounterName, prev.RankPercent, r.RankPercent)
-					announcements++
-				}
-			}
+
+		initialized, err := p.store.ParseRunsInitialized(key)
+		if err != nil {
+			log.Printf("store: failed to check parse run baseline player=%s: %v", key, err)
+			failures++
+			playerFailures++
+			continue
+		}
+		log.Printf("fflogs: fetching recent parse fights player=%s reports=%d", key, recentParseReportLimit)
+		fights, err := p.fflogs.GetRecentParseFights(player, recentParseReportLimit)
+		if err != nil {
+			log.Printf("fflogs: recent parse fights player=%s: %v", key, err)
+			failures++
+			playerFailures++
+			continue
+		}
+		for _, fight := range fights {
+			observations = append(observations, discoveredParseFight{
+				Fight:            fight,
+				AnnounceEligible: initialized,
+			})
+		}
+		if err := p.store.MarkParseRunsInitialized(key); err != nil {
+			log.Printf("store: failed to mark parse run baseline player=%s: %v", key, err)
+			failures++
+			playerFailures++
 		}
 		if err := p.store.RecordTrackedPlayerPoll(TrackedPlayerPollLog{
 			CheckedAt:      playerStart,
@@ -128,8 +120,8 @@ func (p *Poller) checkAll(announce bool) {
 			Server:         player.Server,
 			Region:         player.Region,
 			Announce:       announce,
-			Rankings:       playerRankings,
-			Updates:        playerUpdates,
+			Rankings:       len(fights),
+			Updates:        0,
 			Failures:       playerFailures,
 			DurationMillis: time.Since(playerStart).Milliseconds(),
 		}); err != nil {
@@ -137,44 +129,186 @@ func (p *Poller) checkAll(announce bool) {
 			failures++
 			playerFailures++
 		}
-		log.Printf("poller: player check finished player=%s rankings=%d updates=%d failures=%d", key, playerRankings, playerUpdates, playerFailures)
+		log.Printf("poller: player discovery finished player=%s parse_fights=%d failures=%d", key, len(fights), playerFailures)
 	}
-	log.Printf("poller: check finished announce=%t players=%d zones=%d rankings=%d updates=%d announcements=%d failures=%d duration=%v", announce, len(players), len(p.relevantZones), totalRankings, updates, announcements, failures, time.Since(start).Round(time.Millisecond))
+
+	fights := aggregateTrackedParseFights(observations, players, p.relevantZones)
+	for _, pending := range fights {
+		fight := pending.Fight
+		totalFights++
+		suppressAnnouncement := !announce || !pending.AnnounceEligible
+		storedFightID, isNew, err := p.store.RecordParseFight(fight, suppressAnnouncement)
+		if err != nil {
+			log.Printf("store: failed to record parse fight encounter=%q report=%s fight=%d: %v", fight.EncounterName, fight.ReportCode, fight.FightID, err)
+			failures++
+			continue
+		}
+		if isNew {
+			newFights++
+			for _, result := range fight.Players {
+				key := PlayerKey(result.Player)
+				previousBest := p.store.GetBest(key, fight.EncounterID)
+				if result.Amount <= previousBest.BestAmount {
+					continue
+				}
+				percent := previousBest.RankPercent
+				if result.HasPercent {
+					percent = result.RankPercent
+				}
+				if err := p.store.UpdateBest(key, fight.EncounterID, fight.EncounterName, percent, result.Amount); err != nil {
+					log.Printf("store: failed to update best from parse fight player=%s encounter=%q: %v", key, fight.EncounterName, err)
+					failures++
+				}
+			}
+		}
+
+		claimed := false
+		if !suppressAnnouncement {
+			claimed, err = p.store.ClaimParseFightAnnouncement(storedFightID)
+			if err != nil {
+				log.Printf("store: failed to claim parse fight announcement id=%d encounter=%q: %v", storedFightID, fight.EncounterName, err)
+				failures++
+				continue
+			}
+		}
+		log.Printf("poller: parse fight processed encounter=%q report=%s fight=%d started=%s tracked_players=%d new=%t announce=%t", fight.EncounterName, fight.ReportCode, fight.FightID, fight.StartedAt.Format(time.RFC3339), len(fight.Players), isNew, claimed)
+		if claimed {
+			p.sendParseFightAnnouncement(fight)
+			announcements++
+		}
+	}
+	log.Printf("poller: check finished announce=%t players=%d zones=%d observed_fights=%d unique_fights=%d new_fights=%d announcements=%d failures=%d duration=%v", announce, len(players), len(p.relevantZones), len(observations), totalFights, newFights, announcements, failures, time.Since(start).Round(time.Millisecond))
 }
 
-func (p *Poller) sendAnnouncement(player WatchedPlayer, encounterName string, oldPct, newPct float64) {
-	baseMsg, err := p.messages.ParseImprovement(player, encounterName, oldPct, newPct)
-	if err != nil {
-		log.Printf("template: parse improvement: %v", err)
-		return
+type discoveredParseFight struct {
+	Fight            ParseFightResult
+	AnnounceEligible bool
+}
+
+type pendingParseFight struct {
+	Fight            ParseFightResult
+	AnnounceEligible bool
+}
+
+func aggregateTrackedParseFights(observations []discoveredParseFight, trackedPlayers []WatchedPlayer, zones []RelevantZone) []pendingParseFight {
+	sort.SliceStable(observations, func(i, j int) bool {
+		if observations[i].Fight.StartedAt.Equal(observations[j].Fight.StartedAt) {
+			return observations[i].Fight.ReportCode < observations[j].Fight.ReportCode
+		}
+		return observations[i].Fight.StartedAt.Before(observations[j].Fight.StartedAt)
+	})
+
+	var out []pendingParseFight
+	for _, observation := range observations {
+		if !isRelevantParseFight(observation.Fight, zones) {
+			continue
+		}
+
+		trackedResults := make([]ParsePlayerResult, 0, len(observation.Fight.Players))
+		for _, result := range observation.Fight.Players {
+			tracked, ok := findTrackedPlayer(trackedPlayers, result.Player)
+			if !ok {
+				continue
+			}
+			result.Player = tracked
+			trackedResults = append(trackedResults, result)
+		}
+		if len(trackedResults) == 0 {
+			continue
+		}
+
+		index := matchingParseFight(out, observation.Fight)
+		if index < 0 {
+			fight := observation.Fight
+			fight.Players = nil
+			out = append(out, pendingParseFight{Fight: fight})
+			index = len(out) - 1
+		}
+		out[index].AnnounceEligible = out[index].AnnounceEligible || observation.AnnounceEligible
+		for _, result := range trackedResults {
+			mergeParsePlayerResult(&out[index].Fight.Players, result)
+		}
 	}
 
-	msg := appendGeneratedNote(baseMsg, composeLlamaNote(context.Background(), p.llama, LlamaNoteRequest{
-		Kind: "parse_improvement",
-		Body: baseMsg,
-		Data: map[string]any{
-			"player_name":    player.Name,
-			"server":         player.Server,
-			"region":         player.Region,
-			"encounter_name": encounterName,
-			"previous":       formatPct(oldPct),
-			"current":        formatPct(newPct),
-		},
-		Instructions: "Add one short supportive observation focused on the improvement. Do not rewrite the notification body or invent causes, rankings, streaks, or future outcomes.",
-	}))
+	for i := range out {
+		sort.Slice(out[i].Fight.Players, func(a, b int) bool {
+			return PlayerKey(out[i].Fight.Players[a].Player) < PlayerKey(out[i].Fight.Players[b].Player)
+		})
+	}
+	return out
+}
+
+func matchingParseFight(fights []pendingParseFight, candidate ParseFightResult) int {
+	for i := range fights {
+		fight := fights[i].Fight
+		if fight.EncounterID == candidate.EncounterID && absDuration(fight.StartedAt.Sub(candidate.StartedAt)) <= 5*time.Second {
+			return i
+		}
+	}
+	return -1
+}
+
+func mergeParsePlayerResult(results *[]ParsePlayerResult, candidate ParsePlayerResult) {
+	for i := range *results {
+		if !sameFFLogsCharacter((*results)[i].Player, candidate.Player.Name, candidate.Player.Server, candidate.Player.Region) {
+			continue
+		}
+		if !(*results)[i].HasPercent && candidate.HasPercent {
+			(*results)[i] = candidate
+		}
+		return
+	}
+	*results = append(*results, candidate)
+}
+
+func findTrackedPlayer(players []WatchedPlayer, candidate WatchedPlayer) (WatchedPlayer, bool) {
+	for _, player := range players {
+		if sameFFLogsCharacter(player, candidate.Name, candidate.Server, candidate.Region) {
+			return player, true
+		}
+	}
+	return WatchedPlayer{}, false
+}
+
+func absDuration(value time.Duration) time.Duration {
+	if value < 0 {
+		return -value
+	}
+	return value
+}
+
+func isRelevantParseFight(fight ParseFightResult, zones []RelevantZone) bool {
+	for _, zone := range zones {
+		if fight.ZoneID == zone.ZoneID && fight.DifficultyID == zone.DifficultyID {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *Poller) sendParseFightAnnouncement(fight ParseFightResult) {
+	baseMsg, err := p.messages.ParseFightResult(fight)
+	if err != nil {
+		log.Printf("template: parse fight result: %v", err)
+		return
+	}
 
 	subscriptions := p.store.ListNotificationSubscriptions()
 	if len(subscriptions) == 0 {
-		log.Printf("poller: no subscribers for parse improvement player=%s encounter=%q old=%.1f new=%.1f", PlayerKey(player), encounterName, oldPct, newPct)
+		log.Printf("poller: no subscribers for parse fight encounter=%q report=%s fight=%d", fight.EncounterName, fight.ReportCode, fight.FightID)
 		return
 	}
 	for _, subscription := range subscriptions {
-		if err := sendNotification(p.session, subscription, msg); err != nil {
+		if err := sendNotification(p.session, subscription, baseMsg); err != nil {
 			log.Printf("discord: notification to %s:%s failed: %v", subscription.TargetType, subscription.TargetID, err)
 			continue
 		}
-		log.Printf("poller: announcement sent to %s=%s player=%s encounter=%q old=%.1f new=%.1f", subscription.TargetType, subscription.TargetID, PlayerKey(player), encounterName, oldPct, newPct)
+		log.Printf("poller: parse fight announcement sent to %s=%s encounter=%q report=%s fight=%d tracked_players=%d", subscription.TargetType, subscription.TargetID, fight.EncounterName, fight.ReportCode, fight.FightID, len(fight.Players))
 	}
+}
+
+func formatDPS(amount float64) string {
+	return formatGil(int(math.Round(amount)))
 }
 
 func sendNotification(s *discordgo.Session, subscription NotificationSubscription, msg string) error {
@@ -208,5 +342,5 @@ func formatPct(pct float64) string {
 			suffix = "rd"
 		}
 	}
-	return fmt.Sprintf("%d%s (%v%%)", n, suffix, pct)
+	return fmt.Sprintf("%d%s (%.1f%%)", n, suffix, pct)
 }

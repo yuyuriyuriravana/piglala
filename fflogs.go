@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -122,11 +124,23 @@ type RelevantZone struct {
 	ContentType    string
 }
 
-type CharacterRanking struct {
+type ParsePlayerResult struct {
+	Player      WatchedPlayer
+	Job         string
+	Amount      float64
+	RankPercent float64
+	HasPercent  bool
+}
+
+type ParseFightResult struct {
+	ReportCode    string
+	FightID       int
 	EncounterID   int
 	EncounterName string
-	RankPercent   float64
-	BestAmount    float64
+	ZoneID        int
+	DifficultyID  int
+	StartedAt     time.Time
+	Players       []ParsePlayerResult
 }
 
 const zonesQuery = `
@@ -253,32 +267,60 @@ func (c *fflogsClient) GetRelevantZones() ([]RelevantZone, error) {
 	return result, nil
 }
 
-const zoneRankingsQuery = `
-query ($name: String!, $server: String!, $region: String!, $zoneID: Int!, $difficulty: Int) {
+const recentParseRunsQuery = `
+query ($name: String!, $server: String!, $region: String!, $limit: Int!) {
   characterData {
     character(name: $name, serverSlug: $server, serverRegion: $region) {
-      zoneRankings(zoneID: $zoneID, difficulty: $difficulty)
+      recentReports(limit: $limit) {
+        data {
+          code
+          startTime
+          fights(killType: Kills) {
+            id
+            encounterID
+            name
+            difficulty
+            startTime
+          }
+          rankings(compare: Parses, timeframe: Today)
+        }
+      }
     }
   }
 }`
 
-func (c *fflogsClient) GetZoneRankings(name, serverSlug, serverRegion string, zone RelevantZone) ([]CharacterRanking, error) {
-	data, err := c.query(zoneRankingsQuery, map[string]any{
-		"name":       name,
-		"server":     serverSlug,
-		"region":     serverRegion,
-		"zoneID":     zone.ZoneID,
-		"difficulty": zone.DifficultyID,
+func (c *fflogsClient) GetRecentParseFights(player WatchedPlayer, limit int) ([]ParseFightResult, error) {
+	data, err := c.query(recentParseRunsQuery, map[string]any{
+		"name":   player.Name,
+		"server": player.Server,
+		"region": player.Region,
+		"limit":  limit,
 	})
 	if err != nil {
 		return nil, err
 	}
+	return decodeRecentParseFights(data)
+}
 
+func decodeRecentParseFights(data []byte) ([]ParseFightResult, error) {
 	var resp struct {
 		Data struct {
 			CharacterData struct {
 				Character *struct {
-					ZoneRankings json.RawMessage `json:"zoneRankings"`
+					RecentReports struct {
+						Data []struct {
+							Code      string  `json:"code"`
+							StartTime float64 `json:"startTime"`
+							Fights    []struct {
+								ID            int     `json:"id"`
+								EncounterID   int     `json:"encounterID"`
+								EncounterName string  `json:"name"`
+								DifficultyID  int     `json:"difficulty"`
+								StartTime     float64 `json:"startTime"`
+							} `json:"fights"`
+							Rankings json.RawMessage `json:"rankings"`
+						} `json:"data"`
+					} `json:"recentReports"`
 				} `json:"character"`
 			} `json:"characterData"`
 		} `json:"data"`
@@ -296,28 +338,102 @@ func (c *fflogsClient) GetZoneRankings(name, serverSlug, serverRegion string, zo
 		return nil, fmt.Errorf("character not found on FFLogs")
 	}
 
-	var zr struct {
-		Rankings []struct {
-			Encounter struct {
-				ID   int    `json:"id"`
-				Name string `json:"name"`
-			} `json:"encounter"`
-			RankPercent float64 `json:"rankPercent"`
-			BestAmount  float64 `json:"bestAmount"`
-		} `json:"rankings"`
-	}
-	if err := json.Unmarshal(resp.Data.CharacterData.Character.ZoneRankings, &zr); err != nil {
-		return nil, fmt.Errorf("parsing zoneRankings: %w", err)
-	}
+	var out []ParseFightResult
+	for _, report := range resp.Data.CharacterData.Character.RecentReports.Data {
+		fightStarts := make(map[int]time.Time, len(report.Fights))
+		for _, fight := range report.Fights {
+			absoluteMillis := int64(math.Round(report.StartTime + fight.StartTime))
+			fightStarts[fight.ID] = time.UnixMilli(absoluteMillis).UTC()
+		}
 
-	out := make([]CharacterRanking, 0, len(zr.Rankings))
-	for _, r := range zr.Rankings {
-		out = append(out, CharacterRanking{
-			EncounterID:   r.Encounter.ID,
-			EncounterName: r.Encounter.Name,
-			RankPercent:   r.RankPercent,
-			BestAmount:    r.BestAmount,
-		})
+		var rankings struct {
+			Data []struct {
+				FightID   int `json:"fightID"`
+				ZoneID    int `json:"zone"`
+				Encounter struct {
+					ID   int    `json:"id"`
+					Name string `json:"name"`
+				} `json:"encounter"`
+				DifficultyID int `json:"difficulty"`
+				Roles        map[string]struct {
+					Characters []struct {
+						Name   string  `json:"name"`
+						Class  string  `json:"class"`
+						Amount float64 `json:"amount"`
+						Server struct {
+							Name   string `json:"name"`
+							Region string `json:"region"`
+						} `json:"server"`
+						RankPercent json.RawMessage `json:"rankPercent"`
+					} `json:"characters"`
+				} `json:"roles"`
+			} `json:"data"`
+		}
+		if len(report.Rankings) == 0 || string(report.Rankings) == "null" {
+			continue
+		}
+		if err := json.Unmarshal(report.Rankings, &rankings); err != nil {
+			return nil, fmt.Errorf("parsing report %s rankings: %w", report.Code, err)
+		}
+		for _, ranking := range rankings.Data {
+			startedAt, ok := fightStarts[ranking.FightID]
+			if !ok {
+				continue
+			}
+			fight := ParseFightResult{
+				ReportCode:    report.Code,
+				FightID:       ranking.FightID,
+				EncounterID:   ranking.Encounter.ID,
+				EncounterName: ranking.Encounter.Name,
+				ZoneID:        ranking.ZoneID,
+				DifficultyID:  ranking.DifficultyID,
+				StartedAt:     startedAt,
+			}
+			for _, role := range ranking.Roles {
+				for _, character := range role.Characters {
+					if strings.TrimSpace(character.Name) == "" || strings.TrimSpace(character.Server.Name) == "" || strings.TrimSpace(character.Server.Region) == "" {
+						continue
+					}
+					percent, hasPercent := decodeRankingPercent(character.RankPercent)
+					fight.Players = append(fight.Players, ParsePlayerResult{
+						Player: WatchedPlayer{
+							Name:   strings.TrimSpace(character.Name),
+							Server: strings.ToLower(strings.TrimSpace(character.Server.Name)),
+							Region: strings.ToUpper(strings.TrimSpace(character.Server.Region)),
+						},
+						Job:         character.Class,
+						Amount:      character.Amount,
+						RankPercent: percent,
+						HasPercent:  hasPercent,
+					})
+				}
+			}
+			if len(fight.Players) > 0 {
+				out = append(out, fight)
+			}
+		}
 	}
 	return out, nil
+}
+
+func sameFFLogsCharacter(player WatchedPlayer, name, server, region string) bool {
+	return strings.EqualFold(strings.TrimSpace(player.Name), strings.TrimSpace(name)) &&
+		strings.EqualFold(strings.TrimSpace(player.Server), strings.TrimSpace(server)) &&
+		strings.EqualFold(strings.TrimSpace(player.Region), strings.TrimSpace(region))
+}
+
+func decodeRankingPercent(raw json.RawMessage) (float64, bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return 0, false
+	}
+	var value float64
+	if err := json.Unmarshal(raw, &value); err == nil {
+		return value, true
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		return 0, false
+	}
+	value, err := strconv.ParseFloat(strings.TrimSpace(text), 64)
+	return value, err == nil
 }

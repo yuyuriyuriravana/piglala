@@ -132,6 +132,40 @@ CREATE TABLE IF NOT EXISTS tracked_player_poll_logs (
 CREATE INDEX IF NOT EXISTS idx_tracked_player_poll_logs_player_checked
 ON tracked_player_poll_logs(player_key, checked_at);
 
+CREATE TABLE IF NOT EXISTS parse_run_players (
+	player_key TEXT PRIMARY KEY,
+	initialized_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS parse_fights (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	encounter_id INTEGER NOT NULL,
+	fight_started_at INTEGER NOT NULL,
+	encounter_name TEXT NOT NULL,
+	report_code TEXT NOT NULL,
+	report_fight_id INTEGER NOT NULL,
+	announced INTEGER NOT NULL DEFAULT 0,
+	observed_at TEXT NOT NULL,
+	announced_at TEXT,
+	UNIQUE (encounter_id, fight_started_at)
+);
+
+CREATE INDEX IF NOT EXISTS idx_parse_fights_encounter_started
+ON parse_fights(encounter_id, fight_started_at);
+
+CREATE TABLE IF NOT EXISTS parse_fight_results (
+	fight_id INTEGER NOT NULL,
+	player_key TEXT NOT NULL,
+	player_name TEXT NOT NULL,
+	server TEXT NOT NULL,
+	region TEXT NOT NULL,
+	job TEXT NOT NULL,
+	amount REAL NOT NULL,
+	rank_percent REAL,
+	PRIMARY KEY (fight_id, player_key),
+	FOREIGN KEY (fight_id) REFERENCES parse_fights(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS discord_message_logs (
 	message_id TEXT PRIMARY KEY,
 	channel_id TEXT NOT NULL,
@@ -361,6 +395,149 @@ ON CONFLICT(player_key, encounter_id) DO UPDATE SET
 		return fmt.Errorf("update best parse: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) ParseRunsInitialized(playerKey string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var initializedAt string
+	err := s.db.QueryRow(`
+SELECT initialized_at
+FROM parse_run_players
+WHERE player_key = ?`, playerKey).Scan(&initializedAt)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("check parse run initialization: %w", err)
+	}
+	return true, nil
+}
+
+func (s *Store) MarkParseRunsInitialized(playerKey string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, err := s.db.Exec(`
+INSERT OR IGNORE INTO parse_run_players (player_key, initialized_at)
+VALUES (?, ?)`, playerKey, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return fmt.Errorf("mark parse runs initialized: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) RecordParseFight(fight ParseFightResult, suppressAnnouncement bool) (int64, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if fight.StartedAt.IsZero() {
+		return 0, false, fmt.Errorf("record parse fight: fight start time is required")
+	}
+	if len(fight.Players) == 0 {
+		return 0, false, fmt.Errorf("record parse fight: at least one player result is required")
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, false, fmt.Errorf("record parse fight: begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	fightStartedAt := fight.StartedAt.UTC().Unix()
+	var fightID int64
+	err = tx.QueryRow(`
+SELECT id
+FROM parse_fights
+WHERE encounter_id = ?
+	AND fight_started_at BETWEEN ? AND ?
+ORDER BY ABS(fight_started_at - ?)
+LIMIT 1`, fight.EncounterID, fightStartedAt-5, fightStartedAt+5, fightStartedAt).Scan(&fightID)
+	isNew := false
+	if err == sql.ErrNoRows {
+		insertResult, insertErr := tx.Exec(`
+INSERT INTO parse_fights (
+	encounter_id,
+	fight_started_at,
+	encounter_name,
+	report_code,
+	report_fight_id,
+	announced,
+	observed_at
+) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			fight.EncounterID,
+			fightStartedAt,
+			fight.EncounterName,
+			fight.ReportCode,
+			fight.FightID,
+			boolToInt(suppressAnnouncement),
+			time.Now().UTC().Format(time.RFC3339Nano),
+		)
+		if insertErr != nil {
+			return 0, false, fmt.Errorf("record parse fight: insert fight: %w", insertErr)
+		}
+		fightID, err = insertResult.LastInsertId()
+		if err != nil {
+			return 0, false, fmt.Errorf("record parse fight: inserted fight ID: %w", err)
+		}
+		isNew = true
+	} else if err != nil {
+		return 0, false, fmt.Errorf("record parse fight: find existing fight: %w", err)
+	}
+
+	for _, player := range fight.Players {
+		var rankPercent any
+		if player.HasPercent {
+			rankPercent = player.RankPercent
+		}
+		if _, err := tx.Exec(`
+INSERT OR IGNORE INTO parse_fight_results (
+	fight_id,
+	player_key,
+	player_name,
+	server,
+	region,
+	job,
+	amount,
+	rank_percent
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			fightID,
+			PlayerKey(player.Player),
+			player.Player.Name,
+			player.Player.Server,
+			player.Player.Region,
+			player.Job,
+			player.Amount,
+			rankPercent,
+		); err != nil {
+			return 0, false, fmt.Errorf("record parse fight: insert player %s: %w", PlayerKey(player.Player), err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, false, fmt.Errorf("record parse fight: commit: %w", err)
+	}
+	return fightID, isNew, nil
+}
+
+func (s *Store) ClaimParseFightAnnouncement(fightID int64) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	result, err := s.db.Exec(`
+UPDATE parse_fights
+SET announced = 1,
+	announced_at = ?
+WHERE id = ? AND announced = 0`, time.Now().UTC().Format(time.RFC3339Nano), fightID)
+	if err != nil {
+		return false, fmt.Errorf("claim parse fight announcement: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("claim parse fight announcement rows affected: %w", err)
+	}
+	return rows > 0, nil
 }
 
 func (s *Store) RecordTrackedPlayerPoll(logEntry TrackedPlayerPollLog) error {

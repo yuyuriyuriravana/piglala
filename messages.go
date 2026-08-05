@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/template"
+	"unicode"
 )
 
 const (
 	templateHelp                    = "help"
-	templateParseImprovement        = "parse-improvement"
+	templateParseFightResult        = "parse-fight-result"
 	templateStatusEmpty             = "status-empty"
 	templateStatusPlayer            = "status-player"
 	templateStatusNoParses          = "status-no-parses"
@@ -43,7 +45,7 @@ const (
 
 var messageTemplateNames = []string{
 	templateHelp,
-	templateParseImprovement,
+	templateParseFightResult,
 	templateStatusEmpty,
 	templateStatusPlayer,
 	templateStatusNoParses,
@@ -78,13 +80,10 @@ type MessageTemplates struct {
 	templates map[string]*template.Template
 }
 
-type ParseImprovementTemplateData struct {
-	PlayerName    string
-	Server        string
-	Region        string
+type ParseFightResultTemplateData struct {
 	EncounterName string
-	OldPercent    string
-	NewPercent    string
+	Table         string
+	ReportURL     string
 }
 
 type PlayerTemplateData struct {
@@ -130,7 +129,7 @@ func loadMessageTemplates(dir string) (*MessageTemplates, error) {
 func (m *MessageTemplates) validate() error {
 	samples := map[string]any{
 		templateHelp:                    emptyTemplateData{},
-		templateParseImprovement:        ParseImprovementTemplateData{PlayerName: "Yuyuri Yuri", Server: "ravana", Region: "OC", EncounterName: "Black Cat", OldPercent: "90th (90.0%)", NewPercent: "91st (91.0%)"},
+		templateParseFightResult:        ParseFightResultTemplateData{EncounterName: "Black Cat", Table: "Player       Job    DPS     Parse\nYuyuri Yuri  Viper  30,986  99th", ReportURL: "https://www.fflogs.com/reports/abc#fight=7&type=damage-done"},
 		templateStatusEmpty:             emptyTemplateData{},
 		templateStatusPlayer:            PlayerTemplateData{PlayerKey: "Yuyuri Yuri-ravana-OC", Name: "Yuyuri Yuri", Server: "ravana", Region: "OC"},
 		templateStatusNoParses:          emptyTemplateData{},
@@ -180,15 +179,88 @@ func (m *MessageTemplates) Render(name string, data any) (string, error) {
 	return m.render(name, data)
 }
 
-func (m *MessageTemplates) ParseImprovement(player WatchedPlayer, encounterName string, oldPct, newPct float64) (string, error) {
-	return m.render(templateParseImprovement, ParseImprovementTemplateData{
-		PlayerName:    player.Name,
-		Server:        player.Server,
-		Region:        player.Region,
-		EncounterName: encounterName,
-		OldPercent:    formatPct(oldPct),
-		NewPercent:    formatPct(newPct),
+func (m *MessageTemplates) ParseFightResult(fight ParseFightResult) (string, error) {
+	return m.render(templateParseFightResult, ParseFightResultTemplateData{
+		EncounterName: fight.EncounterName,
+		Table:         formatParseFightTable(fight.Players),
+		ReportURL:     fmt.Sprintf("https://www.fflogs.com/reports/%s#fight=%d&type=damage-done", fight.ReportCode, fight.FightID),
 	})
+}
+
+func formatParseFightTable(results []ParsePlayerResult) string {
+	type row struct {
+		player string
+		job    string
+		dps    string
+		parse  string
+	}
+	rows := make([]row, 0, len(results))
+	playerWidth := len("Player")
+	jobWidth := len("Job")
+	dpsWidth := len("DPS")
+	parseWidth := len("Parse")
+	for _, result := range results {
+		percent := "Pending"
+		if result.HasPercent {
+			percent = formatParseOrdinal(result.RankPercent)
+		}
+		item := row{
+			player: sanitizeParseTableCell(result.Player.Name),
+			job:    humanizeJob(result.Job),
+			dps:    formatDPS(result.Amount),
+			parse:  percent,
+		}
+		rows = append(rows, item)
+		playerWidth = max(playerWidth, len(item.player))
+		jobWidth = max(jobWidth, len(item.job))
+		dpsWidth = max(dpsWidth, len(item.dps))
+		parseWidth = max(parseWidth, len(item.parse))
+	}
+
+	var table strings.Builder
+	fmt.Fprintf(&table, "%-*s  %-*s  %*s  %-*s", playerWidth, "Player", jobWidth, "Job", dpsWidth, "DPS", parseWidth, "Parse")
+	for _, item := range rows {
+		fmt.Fprintf(&table, "\n%-*s  %-*s  %*s  %-*s", playerWidth, item.player, jobWidth, item.job, dpsWidth, item.dps, parseWidth, item.parse)
+	}
+	return table.String()
+}
+
+func sanitizeParseTableCell(value string) string {
+	value = strings.ReplaceAll(value, "`", "'")
+	value = strings.Join(strings.Fields(value), " ")
+	return value
+}
+
+func humanizeJob(job string) string {
+	job = sanitizeParseTableCell(job)
+	var out strings.Builder
+	for i, r := range job {
+		if i > 0 && unicode.IsUpper(r) {
+			out.WriteByte(' ')
+		}
+		out.WriteRune(r)
+	}
+	return out.String()
+}
+
+func formatParseOrdinal(percent float64) string {
+	n := int(percent)
+	suffix := "th"
+	switch n % 10 {
+	case 1:
+		if n%100 != 11 {
+			suffix = "st"
+		}
+	case 2:
+		if n%100 != 12 {
+			suffix = "nd"
+		}
+	case 3:
+		if n%100 != 13 {
+			suffix = "rd"
+		}
+	}
+	return fmt.Sprintf("%d%s", n, suffix)
 }
 
 func (m *MessageTemplates) render(name string, data any) (string, error) {
