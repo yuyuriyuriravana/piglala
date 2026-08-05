@@ -78,6 +78,130 @@ func TestSQLiteStoreBestParsesPersistAndUpdate(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreRecordsAndClaimsParseFightOnlyOnceAcrossReportCopies(t *testing.T) {
+	store := newTestStore(t)
+	startedAt := time.Date(2026, 8, 4, 14, 2, 30, 100*int(time.Millisecond), time.UTC)
+
+	first := ParseFightResult{
+		ReportCode:    "report-a",
+		FightID:       7,
+		EncounterID:   103,
+		EncounterName: "The Tyrant",
+		StartedAt:     startedAt,
+		Players: []ParsePlayerResult{
+			{Player: WatchedPlayer{Name: "Iyvy Ivy", Server: "ravana", Region: "OC"}, Job: "Sage", Amount: 24282.643, RankPercent: 99, HasPercent: true},
+			{Player: WatchedPlayer{Name: "Yuyuri Yuri", Server: "ravana", Region: "OC"}, Job: "Viper", Amount: 30986.1, RankPercent: 19, HasPercent: true},
+		},
+	}
+	fightID, inserted, err := store.RecordParseFight(first, false)
+	if err != nil {
+		t.Fatalf("RecordParseFight: %v", err)
+	}
+	if !inserted {
+		t.Fatal("first fight inserted = false, want true")
+	}
+	claimed, err := store.ClaimParseFightAnnouncement(fightID)
+	if err != nil {
+		t.Fatalf("ClaimParseFightAnnouncement: %v", err)
+	}
+	if !claimed {
+		t.Fatal("first announcement claim = false, want true")
+	}
+
+	duplicate := first
+	duplicate.ReportCode = "report-b"
+	duplicate.FightID = 12
+	duplicate.StartedAt = startedAt.Add(2 * time.Second)
+	duplicate.Players = append([]ParsePlayerResult(nil), first.Players...)
+	duplicate.Players[0].RankPercent = 98.9
+	duplicateID, inserted, err := store.RecordParseFight(duplicate, false)
+	if err != nil {
+		t.Fatalf("duplicate RecordParseFight: %v", err)
+	}
+	if inserted {
+		t.Fatal("duplicate fight inserted = true, want false")
+	}
+	if duplicateID != fightID {
+		t.Fatalf("duplicate fight ID = %d, want %d", duplicateID, fightID)
+	}
+	claimed, err = store.ClaimParseFightAnnouncement(duplicateID)
+	if err != nil {
+		t.Fatalf("duplicate ClaimParseFightAnnouncement: %v", err)
+	}
+	if claimed {
+		t.Fatal("duplicate announcement claim = true, want false")
+	}
+
+	nextRun := first
+	nextRun.ReportCode = "report-c"
+	nextRun.FightID = 3
+	nextRun.StartedAt = startedAt.Add(10 * time.Second)
+	baselineFightID, inserted, err := store.RecordParseFight(nextRun, true)
+	if err != nil {
+		t.Fatalf("next RecordParseFight: %v", err)
+	}
+	if !inserted {
+		t.Fatal("next fight inserted = false, want true")
+	}
+	claimed, err = store.ClaimParseFightAnnouncement(baselineFightID)
+	if err != nil {
+		t.Fatalf("baseline ClaimParseFightAnnouncement: %v", err)
+	}
+	if claimed {
+		t.Fatal("baseline announcement claim = true, want false")
+	}
+
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM parse_fights`).Scan(&count); err != nil {
+		t.Fatalf("count parse fights: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("parse fight count = %d, want 2", count)
+	}
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM parse_fight_results WHERE fight_id = ?`, fightID).Scan(&count); err != nil {
+		t.Fatalf("count parse fight results: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("parse fight player result count = %d, want 2", count)
+	}
+	var reportCode string
+	var rankPercent float64
+	if err := store.db.QueryRow(`
+SELECT f.report_code, r.rank_percent
+FROM parse_fights f
+JOIN parse_fight_results r ON r.fight_id = f.id
+WHERE f.id = ? AND r.player_key = ?`,
+		fightID, "Iyvy Ivy@ravana/OC").Scan(&reportCode, &rankPercent); err != nil {
+		t.Fatalf("query first parse fight: %v", err)
+	}
+	if reportCode != "report-a" || rankPercent != 99 {
+		t.Fatalf("stored report/percentile = %q/%v, want original report-a/99", reportCode, rankPercent)
+	}
+}
+
+func TestSQLiteStoreTracksParseRunInitialization(t *testing.T) {
+	store := newTestStore(t)
+	playerKey := "Iyvy Ivy@ravana/OC"
+
+	initialized, err := store.ParseRunsInitialized(playerKey)
+	if err != nil {
+		t.Fatalf("ParseRunsInitialized: %v", err)
+	}
+	if initialized {
+		t.Fatal("new player initialized = true, want false")
+	}
+	if err := store.MarkParseRunsInitialized(playerKey); err != nil {
+		t.Fatalf("MarkParseRunsInitialized: %v", err)
+	}
+	initialized, err = store.ParseRunsInitialized(playerKey)
+	if err != nil {
+		t.Fatalf("second ParseRunsInitialized: %v", err)
+	}
+	if !initialized {
+		t.Fatal("initialized = false, want true")
+	}
+}
+
 func TestSQLiteStoreRemovePlayerKeepsHistoricalBests(t *testing.T) {
 	store := newTestStore(t)
 	player := WatchedPlayer{Name: "Yuyuri Yuri", Server: "ravana", Region: "OC"}
