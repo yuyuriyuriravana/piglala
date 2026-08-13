@@ -123,11 +123,17 @@ func TestParseFightResultTemplateRendersTrackedPlayerTable(t *testing.T) {
 		"Elara Moonshadow",
 		"Pending",
 		"https://www.fflogs.com/reports/97tbmq4Yz_xdBFwQ#fight=49&type=damage-done",
-		"Percentiles are provisional",
-		"only be announced once",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing %q:\n%s", want, body)
+		}
+	}
+	for _, unwanted := range []string{
+		"Percentiles are provisional",
+		"only be announced once",
+	} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("body contains unwanted notice %q:\n%s", unwanted, body)
 		}
 	}
 	if strings.Count(body, "Iyvy Ivy") != 1 {
